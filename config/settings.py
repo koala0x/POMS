@@ -43,8 +43,9 @@ class Settings:
     ollama_timeout_level1: int = 600
 
     # 二次摘要(频率较低,可上大模型)
-    ollama_model_level2: str = "qwen3:30b"
-    ollama_timeout_level2: int = 1800
+    # ollama_model_level2: str = "qwen3:30b"
+    ollama_model_level2: str = "qwen3:8b"
+    ollama_timeout_level2: int = 600
 
     # 重试策略(网络/解析类异常时使用,ReadTimeout 不重试)
     # 本地 Ollama 不会有网络抖动,失败基本是模型/输入问题,重试只会让 CPU 雪上加霜,
@@ -54,7 +55,7 @@ class Settings:
 
     # ------------------------------ 业务参数 --------------------------------
     poll_interval_seconds: int = 30   # worker 空闲时的轮询间隔(level1+level2 都没数据可处理时)
-    batch_size: int = 10              # 一次摘要的批大小
+    batch_size: int = 20              # 一次摘要的批大小
     # 二次摘要触发阈值:summary_level1 累计未二次摘要 ≥ 该值即触发。
     # 与 level1 串行在同一个 worker 里执行,避免 Ollama 上多个模型来回 swap。
     level2_threshold: int = 5
