@@ -18,10 +18,10 @@ def test_chat_interactive_with_local_ollama() -> None:
     client = OllamaClient(
         base_url="http://localhost:11434",
         model="qwen3:30b",
-        timeout_seconds=120,
+        timeout_seconds=300,
         retry_times=1,
         retry_delay_seconds=0,
     )
-    reply = client.chat("你好，请用一句话自我介绍。你以后专门帮我处理新闻信息怎么样？ 你能作的好吗？")
+    reply = client.chat("为什么你分析一句话耗时那么久？")
     print(f"Model: {reply}")
     assert reply.strip()
