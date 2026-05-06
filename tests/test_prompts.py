@@ -12,7 +12,7 @@
 import unittest
 from datetime import datetime, timezone
 
-import poms.main as poms_worker
+import src.poms.main as poms_worker
 
 
 class TestPrompts(unittest.TestCase):

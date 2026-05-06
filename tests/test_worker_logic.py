@@ -14,7 +14,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
-import poms.main as poms_worker
+import src.poms.main as poms_worker
 
 
 class TestWorkerLogic(unittest.TestCase):
