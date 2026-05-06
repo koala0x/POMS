@@ -65,9 +65,13 @@ def test_twitter_repo_count_fetch_mark(db: Database) -> None:
             cnt = repo.count_unsummarized(session)
             assert cnt >= 3
 
-            fetched = repo.fetch_oldest_unsummarized(session, limit=100)
-            fetched_ids = {int(p.id) for p in fetched}
-            assert set(inserted_ids).issubset(fetched_ids)
+            # 直接按 id 查回这 3 条,验证存在 + 是否未摘要(避免被
+            # 大批量 seed 数据挤出 fetch_oldest_unsummarized 的 limit)。
+            rows = session.scalars(
+                select(TwitterPost).where(TwitterPost.id.in_(inserted_ids))
+            ).all()
+            assert {int(r.id) for r in rows} == set(inserted_ids)
+            assert all(r.is_summarized is False for r in rows)
 
         with db.get_session() as session:
             updated = repo.mark_summarized(session, inserted_ids)

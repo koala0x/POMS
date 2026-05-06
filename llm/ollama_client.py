@@ -22,8 +22,11 @@ class OllamaClient:
 
     - base_url: 例如 http://localhost:11434
     - model: 例如 qwen3:30b
-    - timeout_seconds: 单次请求超时（模型推理慢时需要更大）
-    - retry_times / retry_delay_seconds: 失败重试策略（网络/服务抖动时更稳）
+    - timeout_seconds: 单次请求超时(模型推理慢时需要更大)
+    - retry_times / retry_delay_seconds: 失败重试策略(网络/服务抖动时更稳)
+    - enable_thinking: qwen3 系列默认会输出 <think>...</think> 推理链,
+      让响应非常慢且 message.content 里夹杂大段思考。
+      置 False 通过 Ollama API 的 `think` 字段关闭,响应速度提升数倍。
     """
 
     base_url: str
@@ -31,13 +34,14 @@ class OllamaClient:
     timeout_seconds: int
     retry_times: int
     retry_delay_seconds: int
+    enable_thinking: bool = False
 
     def chat(self, prompt: str) -> str:
         """
         调用 Ollama 生成回复文本。
 
-        请求体采用 messages 格式，便于未来升级为多轮对话（当前只用 user 单轮）。
-        期望响应形态（Ollama 常见返回）：
+        请求体采用 messages 格式,便于未来升级为多轮对话(当前只用 user 单轮)。
+        期望响应形态(Ollama 常见返回):
         {
           "message": { "role": "...", "content": "..." },
           ...
@@ -48,12 +52,14 @@ class OllamaClient:
         last_error: Exception | None = None
         for attempt in range(1, self.retry_times + 1):
             try:
-                # stream=False：一次性返回完整文本，便于后续写库/标记幂等
+                # stream=False:一次性返回完整文本,便于后续写库/标记幂等
+                # think=False:关闭 qwen3 推理链,直接给答案,推理时长缩短数倍
                 resp = requests.post(
                     url,
                     json={
                         "model": self.model,
                         "stream": False,
+                        "think": self.enable_thinking,
                         "messages": [{"role": "user", "content": prompt}],
                     },
                     timeout=self.timeout_seconds,

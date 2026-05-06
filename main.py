@@ -67,12 +67,28 @@ def main() -> None:
     db.create_all()
     logger.info("数据库初始化完成(create_all 已执行)")
 
-    ollama = OllamaClient(
+    # 一次摘要(level1)与二次摘要(level2)使用各自的 Ollama 客户端,
+    # 这样可以给低频高质量的 level2 配置更大模型/更长 timeout。
+    ollama_l1 = OllamaClient(
         base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
-        timeout_seconds=settings.ollama_timeout_seconds,
+        model=settings.ollama_model_level1,
+        timeout_seconds=settings.ollama_timeout_level1,
         retry_times=settings.ollama_retry_times,
         retry_delay_seconds=settings.ollama_retry_delay_seconds,
+    )
+    ollama_l2 = OllamaClient(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_model_level2,
+        timeout_seconds=settings.ollama_timeout_level2,
+        retry_times=settings.ollama_retry_times,
+        retry_delay_seconds=settings.ollama_retry_delay_seconds,
+    )
+    logger.info(
+        "Ollama 客户端就绪:level1={} (timeout {}s) / level2={} (timeout {}s)",
+        settings.ollama_model_level1,
+        settings.ollama_timeout_level1,
+        settings.ollama_model_level2,
+        settings.ollama_timeout_level2,
     )
 
     # 仓储层:原始表(twitter/binance)与摘要表(level1/level2)
@@ -93,7 +109,7 @@ def main() -> None:
             batch_size=settings.batch_size,
             raw_repo=twitter_repo,
             level1_repo=level1_repo,
-            ollama=ollama,
+            ollama=ollama_l1,
             prompt_path=prompts_dir / "level1_twitter.txt",
             timezone=settings.timezone,
         ),
@@ -103,7 +119,7 @@ def main() -> None:
             batch_size=settings.batch_size,
             raw_repo=binance_repo,
             level1_repo=level1_repo,
-            ollama=ollama,
+            ollama=ollama_l1,
             prompt_path=prompts_dir / "level1_binance.txt",
             timezone=settings.timezone,
         ),
@@ -115,7 +131,7 @@ def main() -> None:
             source="twitter",
             level1_repo=level1_repo,
             level2_repo=level2_repo,
-            ollama=ollama,
+            ollama=ollama_l2,
             prompt_path=prompts_dir / "level2_twitter.txt",
             timezone=settings.timezone,
         ),
@@ -124,7 +140,7 @@ def main() -> None:
             source="binance_square",
             level1_repo=level1_repo,
             level2_repo=level2_repo,
-            ollama=ollama,
+            ollama=ollama_l2,
             prompt_path=prompts_dir / "level2_binance.txt",
             timezone=settings.timezone,
         ),
