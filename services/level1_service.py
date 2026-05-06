@@ -6,15 +6,18 @@ from __future__ import annotations
 做什么:
 - 轮询统计未处理数量,达到 batch_size 才触发
 - 拉取一批最早的未处理数据(优先 created_at,其次 id)
+- **预过滤**(services.prefilter):rule-based 把明显噪音剔除,LLM 只看有信号的内容
 - 生成 prompt 调用 LLM 得到摘要
-- 写入 summary_level1,并将本批原始数据标记为已处理(幂等)
+- 写入 summary_level1,并将本批原始数据(含被过滤的)全部标记为已处理(幂等)
 
 注意:
 - Twitter 与 币安广场 两个 source 全程独立处理(不合并)
 - 失败时不更新 is_summarized,保证下次轮询可继续重试
+- 整批被预过滤掉时:跳过 LLM 调用,但仍标记为已处理,返回 True 让 worker 继续推进
 - DB 操作切换为 SQLAlchemy Session;LLM 调用前会关闭一次 Session,避免长时间占用连接
 """
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from db.connection import Database
 from llm.ollama_client import OllamaClient
+from services.prefilter import split as prefilter_split
 
 
 class RawRepo(Protocol):
@@ -123,11 +127,47 @@ class Level1Service:
             )
             return False
 
+        # 预过滤:rule-based 剔除明显噪音,LLM 只看有信号的内容。
+        # raw_ids_all 记录本批所有原始 id(无论留下还是丢弃),最后都要标记为已处理,
+        # 否则被过滤的帖子会被无限重新拉取。
+        raw_ids_all = [int(getattr(p, "id")) for p in posts]
+        kept, dropped = prefilter_split(posts)
+        drop_reasons = Counter(reason for _, reason in dropped)
+        logger.info(
+            "[{}] 预过滤:{} → {}(丢弃 {}: {})",
+            self.source,
+            len(posts),
+            len(kept),
+            len(dropped),
+            dict(drop_reasons),
+        )
+
+        # 整批均被过滤:跳过 LLM,直接标记并返回 True 让 worker 继续推进
+        if not kept:
+            try:
+                with self.db.get_session() as session:
+                    try:
+                        self.raw_repo.mark_summarized(session, raw_ids_all)
+                        session.commit()
+                    except Exception:
+                        session.rollback()
+                        raise
+            except Exception as e:
+                logger.error("[{}] 噪音批次标记失败:{}", self.source, e)
+                return False
+            logger.info(
+                "[{}] 整批均为噪音,跳过 LLM,标记 {} 条已处理",
+                self.source,
+                len(raw_ids_all),
+            )
+            return True
+
         # 构造 prompt:模板文件使用 {items} 占位符。
         # 这里直接通过 ORM 实例的属性访问;Session 已关闭但属性已加载,detached 仍可读。
+        # 只把 kept 喂给 LLM,被过滤掉的不进 prompt。
         template = self.prompt_path.read_text(encoding="utf-8")
         items = []
-        for idx, p in enumerate(posts, start=1):
+        for idx, p in enumerate(kept, start=1):
             author = getattr(p, "author", None) or ""
             posted_at = getattr(p, "posted_at", None)
             meta = f"{author}".strip()
@@ -151,7 +191,9 @@ class Level1Service:
             logger.error("[{}] 一次摘要失败:{}", self.source, e)
             return False
 
-        raw_ids = [int(getattr(p, "id")) for p in posts]
+        # raw_ids 只记录真正进了 LLM 的(kept),保持 raw_count == len(raw_ids) 的不变量;
+        # 但 mark_summarized 会标记全部(kept + dropped),否则被过滤的会被重复拉取。
+        kept_ids = [int(getattr(p, "id")) for p in kept]
         try:
             with self.db.get_session() as session:
                 try:
@@ -161,11 +203,11 @@ class Level1Service:
                         session=session,
                         source=self.source,
                         summary=summary,
-                        raw_ids=raw_ids,
-                        raw_count=len(raw_ids),
+                        raw_ids=kept_ids,
+                        raw_count=len(kept_ids),
                         created_at=now,
                     )
-                    updated = self.raw_repo.mark_summarized(session, raw_ids)
+                    updated = self.raw_repo.mark_summarized(session, raw_ids_all)
                     session.commit()
                 except Exception:
                     session.rollback()
@@ -174,18 +216,19 @@ class Level1Service:
             logger.error("[{}] 写入/更新数据库失败:{}", self.source, e)
             return False
 
-        if updated != len(raw_ids):
+        if updated != len(raw_ids_all):
             logger.warning(
                 "[{}] 原始数据标记条数不一致:期望 {},实际 {}",
                 self.source,
-                len(raw_ids),
+                len(raw_ids_all),
                 updated,
             )
 
         logger.info(
-            "[{}] 一次摘要完成:level1_id={} raw_count={}",
+            "[{}] 一次摘要完成:level1_id={} kept={}/{}",
             self.source,
             level1_id,
-            len(raw_ids),
+            len(kept_ids),
+            len(raw_ids_all),
         )
         return True
