@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 """
-配置加载模块。
+配置中心。
 
-- 从 .env / 环境变量读取配置并统一暴露给其他模块使用
-- 使用 lru_cache 确保配置只解析一次，避免多处 import 反复读取环境变量
-- TIMEZONE 用于“整点”边界计算（例如二次摘要按小时窗口汇总）
+所有运行时配置直接写在这里,**不依赖外部 .env 文件**。
+- 改配置:直接修改本文件 Settings 类里的字段默认值
+- 新增配置:在 Settings 里加字段并填默认值,使用方 get_settings() 读取
 """
 
-import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from zoneinfo import ZoneInfo
-
-from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
@@ -25,81 +22,51 @@ class Settings:
     - 所有时间计算以 timezone 作为"业务时区",写入数据库时保留 tz 信息
     - DB_* 用于连接 PostgreSQL
     - OLLAMA_* 用于调用本地 Ollama 的 /api/chat 接口
-    - 一次摘要(level1)与二次摘要(level2)可以使用不同的模型/超时:
+    - 一次摘要(level1)与二次摘要(level2)使用各自的 Ollama 配置:
       level1 高频调用,推荐轻量模型;level2 一小时一次,可上大模型
     """
 
-    db_host: str
-    db_port: int
-    db_name: str
-    db_user: str
-    db_password: str
+    # ------------------------------ PostgreSQL ------------------------------
+    db_host: str = "127.0.0.1"
+    db_port: int = 5432
+    db_name: str = "all_new"
+    db_user: str = "all_new"
+    db_password: str = "123qwe"
 
-    ollama_base_url: str
-    ollama_model_level1: str
-    ollama_model_level2: str
-    ollama_timeout_level1: int
-    ollama_timeout_level2: int
-    ollama_retry_times: int
-    ollama_retry_delay_seconds: int
+    # ------------------------------ Ollama 服务 ------------------------------
+    ollama_base_url: str = "http://localhost:11434"
 
-    poll_interval_seconds: int
-    batch_size: int
+    # 一次摘要(每 30s 触发,频繁) → 推荐轻量模型
+    ollama_model_level1: str = "qwen3:8b"
+    ollama_timeout_level1: int = 600
 
-    log_path: str
-    log_retention_days: int
+    # 二次摘要(每小时一次,可上大模型)
+    ollama_model_level2: str = "qwen3:30b"
+    ollama_timeout_level2: int = 1800
 
-    timezone: ZoneInfo
+    # 重试策略(网络/解析类异常时使用,ReadTimeout 不重试)
+    ollama_retry_times: int = 3
+    ollama_retry_delay_seconds: int = 10
 
+    # ------------------------------ 业务参数 --------------------------------
+    poll_interval_seconds: int = 30   # Level1 worker 空闲时的轮询间隔
+    batch_size: int = 50              # 一次摘要的批大小
 
-def _env_int(name: str, default: int) -> int:
-    """
-    从环境变量读取 int，缺省或空字符串时返回 default。
+    # ------------------------------ 日志 -----------------------------------
+    log_path: str = "./logs/service.log"
+    log_retention_days: int = 30
 
-    这里不吞掉 ValueError，避免默默使用错误配置导致难以排查的问题。
-    """
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    return int(raw)
+    # ------------------------------ 时区 -----------------------------------
+    # 整点窗口计算用(level2 时间窗 [上一小时, 本小时))
+    # frozen dataclass 中可变默认必须用 default_factory
+    timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """
-    读取并构造 Settings。
+    返回单例 Settings。
 
-    load_dotenv() 会按惯例从当前工作目录下的 .env 加载环境变量(如果存在)。
-    lru_cache 保证整个进程只创建一份 Settings 实例。
-
-    向后兼容:
-    - 如果只设置了 OLLAMA_MODEL,会同时作为 level1 / level2 的默认模型
-    - OLLAMA_TIMEOUT_SECONDS 同理
+    通过 lru_cache 保证整个进程只构造一次,避免重复实例化。
     """
-    load_dotenv()
-
-    tz_name = os.getenv("TIMEZONE", "UTC")
-    timezone = ZoneInfo(tz_name)
-
-    legacy_model = os.getenv("OLLAMA_MODEL", "qwen3:8b")
-    legacy_timeout = _env_int("OLLAMA_TIMEOUT_SECONDS", 120)
-
-    return Settings(
-        db_host=os.getenv("DB_HOST", "127.0.0.1"),
-        db_port=_env_int("DB_PORT", 5432),
-        db_name=os.getenv("DB_NAME", "all_new"),
-        db_user=os.getenv("DB_USER", "all_new"),
-        db_password=os.getenv("DB_PASSWORD", "123qwe"),
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        ollama_model_level1=os.getenv("OLLAMA_MODEL_LEVEL1", legacy_model),
-        ollama_model_level2=os.getenv("OLLAMA_MODEL_LEVEL2", legacy_model),
-        ollama_timeout_level1=_env_int("OLLAMA_TIMEOUT_LEVEL1", legacy_timeout),
-        ollama_timeout_level2=_env_int("OLLAMA_TIMEOUT_LEVEL2", legacy_timeout),
-        ollama_retry_times=_env_int("OLLAMA_RETRY_TIMES", 3),
-        ollama_retry_delay_seconds=_env_int("OLLAMA_RETRY_DELAY_SECONDS", 10),
-        poll_interval_seconds=_env_int("POLL_INTERVAL_SECONDS", 30),
-        batch_size=_env_int("BATCH_SIZE", 50),
-        log_path=os.getenv("LOG_PATH", "./logs/service.log"),
-        log_retention_days=_env_int("LOG_RETENTION_DAYS", 30),
-        timezone=timezone,
-    )
+    return Settings()
