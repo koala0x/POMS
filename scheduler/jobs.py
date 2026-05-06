@@ -107,6 +107,10 @@ class Jobs:
             if processed_any:
                 # 还可能有积压(level1 刚写入新数据,或者 level2 还能再凑一批)
                 continue
+            logger.info(
+                "本轮 level1/level2 均无数据可处理,sleep {}s 后重试",
+                self._poll_interval_seconds,
+            )
             self._stop_event.wait(self._poll_interval_seconds)
 
         logger.info("summary worker 已停止")
