@@ -10,6 +10,7 @@ Repository 集成测试,基于真实 PostgreSQL。
 """
 
 from datetime import datetime, timedelta, timezone
+import os
 
 import pytest
 from sqlalchemy import func, select
@@ -240,6 +241,11 @@ _SEED_SAMPLE_CONTENTS = [
 ]
 
 
+@pytest.mark.skipif(
+    not os.getenv("RUN_SEED"),
+    reason="种子测试默认跳过(每跑一次新增 50 条数据)。"
+    "需要喂数据时显式启用:`RUN_SEED=1 pytest tests/test_repositories.py::test_seed_50_twitter_posts -s`",
+)
 def test_seed_50_twitter_posts(db: Database) -> None:
     """
     向 twitter_posts 写入 50 条不同内容的样本数据。

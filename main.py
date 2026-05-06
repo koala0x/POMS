@@ -153,17 +153,20 @@ def main() -> None:
         poll_interval_seconds=settings.poll_interval_seconds,
         timezone=settings.timezone,
     )
-    scheduler = jobs.start()
-    logger.info("服务启动成功:poll_interval={}s timezone={}", settings.poll_interval_seconds, settings.timezone)
+    jobs.start()
+    logger.info(
+        "服务启动成功:level1 worker 串行轮询(空闲 sleep {}s),level2 cron 整点触发",
+        settings.poll_interval_seconds,
+    )
 
     try:
-        # BackgroundScheduler 在后台线程运行,这里只需要保持主线程常驻
+        # Level1 worker 在后台线程跑,主线程只需要常驻
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
         logger.info("收到退出信号,正在停止调度器...")
     finally:
-        scheduler.shutdown(wait=False)
+        jobs.shutdown(wait=False)
 
 
 if __name__ == "__main__":

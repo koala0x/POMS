@@ -82,18 +82,28 @@ class Level1Service:
     prompt_path: Path
     timezone: ZoneInfo
 
-    def run_once(self) -> None:
+    def run_once(self) -> bool:
+        """
+        执行一次摘要(若数据足够)。
+
+        返回值:
+        - True:本次真的处理了一批数据(走完了 LLM + 写库流程)
+        - False:数据不足或出现可恢复异常,**未触发** LLM 调用 / 未写库
+
+        worker 循环会用这个返回值决定:处理过 → 立刻进下一轮(可能还有积压);
+        没处理过 → sleep poll_interval_seconds 后再 check。
+        """
         # 先做轻量统计,避免每次轮询都拉取完整数据。
         try:
             with self.db.get_session() as session:
                 cnt = self.raw_repo.count_unsummarized(session)
         except Exception as e:
             logger.error("[{}] 轮询失败:{}", self.source, e)
-            return
+            return False
 
         if cnt < self.batch_size:
             logger.info("[{}] 未处理数据不足:{}/{}", self.source, cnt, self.batch_size)
-            return
+            return False
 
         # 拉取一批最早的未处理数据(批大小固定为 batch_size)。
         # 这一段不写入,因此 Session 关闭即可,无需 commit。
@@ -102,7 +112,7 @@ class Level1Service:
                 posts = self.raw_repo.fetch_oldest_unsummarized(session, self.batch_size)
         except Exception as e:
             logger.error("[{}] 拉取原始数据失败:{}", self.source, e)
-            return
+            return False
 
         if len(posts) < self.batch_size:
             logger.warning(
@@ -111,7 +121,7 @@ class Level1Service:
                 len(posts),
                 self.batch_size,
             )
-            return
+            return False
 
         # 构造 prompt:模板文件使用 {items} 占位符。
         # 这里直接通过 ORM 实例的属性访问;Session 已关闭但属性已加载,detached 仍可读。
@@ -139,7 +149,7 @@ class Level1Service:
             summary = self.ollama.chat(prompt)
         except Exception as e:
             logger.error("[{}] 一次摘要失败:{}", self.source, e)
-            return
+            return False
 
         raw_ids = [int(getattr(p, "id")) for p in posts]
         try:
@@ -162,7 +172,7 @@ class Level1Service:
                     raise
         except Exception as e:
             logger.error("[{}] 写入/更新数据库失败:{}", self.source, e)
-            return
+            return False
 
         if updated != len(raw_ids):
             logger.warning(
@@ -178,3 +188,4 @@ class Level1Service:
             level1_id,
             len(raw_ids),
         )
+        return True
