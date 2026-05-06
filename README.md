@@ -22,8 +22,8 @@
 ├── config/
 │   └── settings.py
 ├── db/
-│   ├── connection.py
-│   ├── migrations/
+│   ├── connection.py        # SQLAlchemy Engine + Session 管理
+│   ├── models.py            # ORM 模型定义(create_all 自动建表)
 │   └── repositories/
 ├── llm/
 │   └── ollama_client.py
