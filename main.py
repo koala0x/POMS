@@ -129,6 +129,7 @@ def main() -> None:
         Level2Service(
             db=db,
             source="twitter",
+            threshold=settings.level2_threshold,
             level1_repo=level1_repo,
             level2_repo=level2_repo,
             ollama=ollama_l2,
@@ -138,6 +139,7 @@ def main() -> None:
         Level2Service(
             db=db,
             source="binance_square",
+            threshold=settings.level2_threshold,
             level1_repo=level1_repo,
             level2_repo=level2_repo,
             ollama=ollama_l2,
@@ -146,16 +148,17 @@ def main() -> None:
         ),
     ]
 
-    # 调度层:注册并启动定时任务
+    # 调度层:level1 / level2 共用一个 worker 线程串行触发,避免 Ollama 模型 swap
     jobs = Jobs(
         level1_services=level1_services,
         level2_services=level2_services,
         poll_interval_seconds=settings.poll_interval_seconds,
-        timezone=settings.timezone,
     )
     jobs.start()
     logger.info(
-        "服务启动成功:level1 worker 串行轮询(空闲 sleep {}s),level2 cron 整点触发",
+        "服务启动成功:summary worker 串行 (level1 batch={} / level2 threshold={},空闲 sleep {}s)",
+        settings.batch_size,
+        settings.level2_threshold,
         settings.poll_interval_seconds,
     )
 

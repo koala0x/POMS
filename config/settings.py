@@ -23,7 +23,9 @@ class Settings:
     - DB_* 用于连接 PostgreSQL
     - OLLAMA_* 用于调用本地 Ollama 的 /api/chat 接口
     - 一次摘要(level1)与二次摘要(level2)使用各自的 Ollama 配置:
-      level1 高频调用,推荐轻量模型;level2 一小时一次,可上大模型
+      level1 高频调用,推荐轻量模型;level2 频率较低,可上大模型
+    - level1 / level2 共用同一个 worker 串行循环触发(避免 Ollama 上多个模型 swap),
+      触发条件分别由 batch_size 与 level2_threshold 控制
     """
 
     # ------------------------------ PostgreSQL ------------------------------
@@ -40,7 +42,7 @@ class Settings:
     ollama_model_level1: str = "qwen3:8b"
     ollama_timeout_level1: int = 600
 
-    # 二次摘要(每小时一次,可上大模型)
+    # 二次摘要(频率较低,可上大模型)
     ollama_model_level2: str = "qwen3:30b"
     ollama_timeout_level2: int = 1800
 
@@ -51,15 +53,18 @@ class Settings:
     ollama_retry_delay_seconds: int = 0
 
     # ------------------------------ 业务参数 --------------------------------
-    poll_interval_seconds: int = 30   # Level1 worker 空闲时的轮询间隔
+    poll_interval_seconds: int = 30   # worker 空闲时的轮询间隔(level1+level2 都没数据可处理时)
     batch_size: int = 10              # 一次摘要的批大小
+    # 二次摘要触发阈值:summary_level1 累计未二次摘要 ≥ 该值即触发。
+    # 与 level1 串行在同一个 worker 里执行,避免 Ollama 上多个模型来回 swap。
+    level2_threshold: int = 5
 
     # ------------------------------ 日志 -----------------------------------
     log_path: str = "./logs/service.log"
     log_retention_days: int = 30
 
     # ------------------------------ 时区 -----------------------------------
-    # 整点窗口计算用(level2 时间窗 [上一小时, 本小时))
+    # 时间戳写库时统一带 tz;period_start/period_end 等字段也用它构造。
     # frozen dataclass 中可变默认必须用 default_factory
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
 
