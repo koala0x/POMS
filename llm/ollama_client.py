@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""
+Ollama HTTP 客户端封装。
+
+目标：
+- 业务层只关心“给 prompt -> 得到文本摘要”，不需要理解 Ollama HTTP 细节
+- 把超时、重试、空内容判定等异常处理集中在一处
+"""
+
 import time
 from dataclasses import dataclass
 
@@ -9,6 +17,15 @@ from loguru import logger
 
 @dataclass(frozen=True)
 class OllamaClient:
+    """
+    Ollama /api/chat 的最小封装。
+
+    - base_url: 例如 http://localhost:11434
+    - model: 例如 qwen3:30b
+    - timeout_seconds: 单次请求超时（模型推理慢时需要更大）
+    - retry_times / retry_delay_seconds: 失败重试策略（网络/服务抖动时更稳）
+    """
+
     base_url: str
     model: str
     timeout_seconds: int
@@ -16,11 +33,22 @@ class OllamaClient:
     retry_delay_seconds: int
 
     def chat(self, prompt: str) -> str:
+        """
+        调用 Ollama 生成回复文本。
+
+        请求体采用 messages 格式，便于未来升级为多轮对话（当前只用 user 单轮）。
+        期望响应形态（Ollama 常见返回）：
+        {
+          "message": { "role": "...", "content": "..." },
+          ...
+        }
+        """
         url = self.base_url.rstrip("/") + "/api/chat"
 
         last_error: Exception | None = None
         for attempt in range(1, self.retry_times + 1):
             try:
+                # stream=False：一次性返回完整文本，便于后续写库/标记幂等
                 resp = requests.post(
                     url,
                     json={
@@ -37,6 +65,7 @@ class OllamaClient:
                     if isinstance(data, dict)
                     else None
                 )
+                # 空字符串也视为失败：避免写入无意义摘要并错误地标记为已处理
                 if not content or not str(content).strip():
                     raise ValueError("Ollama 返回空内容")
                 return str(content).strip()

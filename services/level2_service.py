@@ -1,5 +1,18 @@
 from __future__ import annotations
 
+"""
+二次摘要业务编排（Level2）。
+
+职责：
+- 每小时整点触发一次，按“过去 1 小时窗口”汇总未二次摘要的 level1 记录
+- 将多个 level1.summary 拼接成 prompt 调用 LLM
+- 写入 summary_level2，并将涉及的 level1 记录标记为已二次摘要（幂等）
+
+注意：
+- 仍按 source 独立处理：twitter / binance_square 不合并
+- 若过去 1 小时没有可处理的 level1，则记录日志并跳过
+"""
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,6 +27,8 @@ from llm.ollama_client import OllamaClient
 
 
 class Level1Repo(Protocol):
+    """summary_level1 表读取/标记协议。"""
+
     def fetch_unsummarized_for_period(
         self,
         conn: psycopg2.extensions.connection,
@@ -28,6 +43,8 @@ class Level1Repo(Protocol):
 
 
 class Level2Repo(Protocol):
+    """summary_level2 表写入协议。"""
+
     def insert(
         self,
         conn: psycopg2.extensions.connection,
@@ -43,6 +60,14 @@ class Level2Repo(Protocol):
 
 @dataclass(frozen=True)
 class Level2Service:
+    """
+    单个 source 的二次摘要服务。
+
+    按“业务时区”计算整点窗口：
+    - period_end：当前时间向下取整到小时（minute/second=0）
+    - period_start：period_end 往前 1 小时
+    """
+
     db: Database
     source: str
     level1_repo: Level1Repo
@@ -52,10 +77,12 @@ class Level2Service:
     timezone: ZoneInfo
 
     def run_hourly(self) -> None:
+        # 计算“上一小时窗口”的边界。窗口是 [period_start, period_end)。
         now = datetime.now(self.timezone)
         period_end = now.replace(minute=0, second=0, microsecond=0)
         period_start = period_end - timedelta(hours=1)
 
+        # Step 1: 取出过去一小时内未做二次摘要的 level1。
         try:
             with self.db.get_conn() as conn:
                 level1_rows = self.level1_repo.fetch_unsummarized_for_period(
@@ -78,6 +105,7 @@ class Level2Service:
             )
             return
 
+        # Step 2: 构造 prompt。模板文件里使用 {items} 占位符。
         template = self.prompt_path.read_text(encoding="utf-8")
         items = []
         for idx, s in enumerate(level1_rows, start=1):
@@ -86,6 +114,7 @@ class Level2Service:
 
         prompt = template.format(items="\n\n".join(items))
         try:
+            # Step 3: 调用 LLM 生成二次摘要。失败则不落库/不标记，下一小时仍可重试。
             l2_summary = self.ollama.chat(prompt)
         except Exception as e:
             logger.error("[{}] 二次摘要失败：{}", self.source, e)
@@ -95,6 +124,7 @@ class Level2Service:
         try:
             with self.db.get_conn() as conn:
                 try:
+                    # Step 4: 同一事务内写入 level2 并标记 level1，保证一致性。
                     created_at = datetime.now(self.timezone)
                     level2_id = self.level2_repo.insert(
                         conn=conn,

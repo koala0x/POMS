@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+"""
+程序入口。
+
+启动流程：
+1) 读取配置（.env）
+2) 初始化日志（stdout + 文件按天滚动）
+3) 构建 DB / LLM 客户端与各层仓储/服务
+4) 注册调度任务并常驻运行
+"""
+
 import sys
 import time
 from pathlib import Path
@@ -19,6 +29,11 @@ from services.level2_service import Level2Service
 
 
 def _init_logging(log_path: str, retention_days: int) -> None:
+    """
+    初始化 loguru 日志：
+    - 控制台输出：便于开发/容器查看
+    - 文件输出：按天滚动，保留 retention_days 天
+    """
     logger.remove()
     logger.add(
         sys.stdout,
@@ -39,10 +54,12 @@ def _init_logging(log_path: str, retention_days: int) -> None:
 
 
 def main() -> None:
+    # 配置与日志初始化
     settings = get_settings()
     Path(settings.log_path).parent.mkdir(parents=True, exist_ok=True)
     _init_logging(settings.log_path, settings.log_retention_days)
 
+    # 基础依赖（DB / LLM）
     db = Database(settings)
     ollama = OllamaClient(
         base_url=settings.ollama_base_url,
@@ -52,14 +69,17 @@ def main() -> None:
         retry_delay_seconds=settings.ollama_retry_delay_seconds,
     )
 
+    # 仓储层：原始表（twitter/binance）与摘要表（level1/level2）
     twitter_repo = TwitterRepo()
     binance_repo = BinanceRepo()
     level1_repo = Level1Repo()
     level2_repo = Level2Repo()
 
+    # Prompt 模板目录
     base_dir = Path(__file__).resolve().parent
     prompts_dir = base_dir / "prompts"
 
+    # 业务层：分别为两个 source 构建服务实例（互不合并）
     level1_services = [
         Level1Service(
             db=db,
@@ -104,6 +124,7 @@ def main() -> None:
         ),
     ]
 
+    # 调度层：注册并启动定时任务
     jobs = Jobs(
         level1_services=level1_services,
         level2_services=level2_services,
@@ -114,6 +135,7 @@ def main() -> None:
     logger.info("服务启动成功：poll_interval={}s timezone={}", settings.poll_interval_seconds, settings.timezone)
 
     try:
+        # BackgroundScheduler 在后台线程运行，这里保持主线程常驻即可
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

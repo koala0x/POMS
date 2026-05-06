@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""
+配置加载模块。
+
+- 从 .env / 环境变量读取配置并统一暴露给其他模块使用
+- 使用 lru_cache 确保配置只解析一次，避免多处 import 反复读取环境变量
+- TIMEZONE 用于“整点”边界计算（例如二次摘要按小时窗口汇总）
+"""
+
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -10,6 +18,15 @@ from dotenv import load_dotenv
 
 @dataclass(frozen=True)
 class Settings:
+    """
+    服务运行所需的全部配置项。
+
+    约定：
+    - 所有时间计算以 timezone 作为“业务时区”，写入数据库时保留 tz 信息
+    - DB_* 用于连接 PostgreSQL
+    - OLLAMA_* 用于调用本地 Ollama 的 /api/chat 接口
+    """
+
     db_host: str
     db_port: int
     db_name: str
@@ -32,6 +49,11 @@ class Settings:
 
 
 def _env_int(name: str, default: int) -> int:
+    """
+    从环境变量读取 int，缺省或空字符串时返回 default。
+
+    这里不吞掉 ValueError，避免默默使用错误配置导致难以排查的问题。
+    """
     raw = os.getenv(name)
     if raw is None or raw == "":
         return default
@@ -40,6 +62,12 @@ def _env_int(name: str, default: int) -> int:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """
+    读取并构造 Settings。
+
+    load_dotenv() 会按惯例从当前工作目录下的 .env 加载环境变量（如果存在）。
+    lru_cache 保证整个进程只创建一份 Settings 实例。
+    """
     load_dotenv()
 
     tz_name = os.getenv("TIMEZONE", "UTC")
