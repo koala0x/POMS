@@ -76,9 +76,9 @@ def get_settings() -> Settings:
     return Settings(
         db_host=os.getenv("DB_HOST", "127.0.0.1"),
         db_port=_env_int("DB_PORT", 5432),
-        db_name=os.getenv("DB_NAME", "postgres"),
-        db_user=os.getenv("DB_USER", "postgres"),
-        db_password=os.getenv("DB_PASSWORD", "postgres"),
+        db_name=os.getenv("DB_NAME", "all_new"),
+        db_user=os.getenv("DB_USER", "all_new"),
+        db_password=os.getenv("DB_PASSWORD", "123qwe"),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen3:30b"),
         ollama_timeout_seconds=_env_int("OLLAMA_TIMEOUT_SECONDS", 120),
