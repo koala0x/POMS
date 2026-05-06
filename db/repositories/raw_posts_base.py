@@ -96,13 +96,28 @@ class RawPostsRepoBase:
             )
             cols = {row[0] for row in cur.fetchall()}
 
-        if "id" not in cols:
-            # 没有 id 就无法保证“稳定取最早 N 条”，也无法做 ANY(ids) 批量标记。
-            raise RuntimeError(f"{self._table_name} 缺少 id 字段")
+        if not cols:
+            raise RuntimeError(f"{self._table_name} 表不存在或不在当前 schema/search_path")
+
+        id_col = _pick_first(
+            cols,
+            [
+                "id",
+                "post_id",
+                "tweet_id",
+                "status_id",
+                "message_id",
+                "pk_id",
+                "pk",
+            ],
+        )
+        if id_col is None:
+            existing = ", ".join(sorted(cols)[:30])
+            raise RuntimeError(f"{self._table_name} 未找到主键字段（候选 id/post_id/...），现有列：{existing}")
 
         # 下面是“尽量匹配”的候选列集合。匹配不到就使用默认值：
         # - content/is_summarized 仍可能不存在：此时 SQL 会报错，日志可用于定位差异
-        self._id_col = "id"
+        self._id_col = id_col
         self._content_col = (
             _pick_first(cols, ["content", "text", "body", "message", "post", "tweet"])
             or "content"
