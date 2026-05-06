@@ -8,8 +8,8 @@ POMS 后台 Worker（持续运行）
 4) 使用 poms_state 存储断点（每个源表 last_id、小时窗口进度），支持重启续跑。
 
 配置：
-- 支持落地 INI 配置文件（支持注释），例如 poms_worker.ini：
-  - CLI：--config /path/to/poms_worker.ini
+- 支持落地 INI 配置文件（支持注释），例如 config/poms_worker.ini：
+  - CLI：--config /path/to/config/poms_worker.ini
   - INI 段落：postgres / ollama / worker / sources / source.<name>
 - 同时保留环境变量配置；环境变量优先级高于配置文件。
 - 环境变量：
@@ -33,7 +33,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -739,6 +739,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     pre.add_argument("--config", type=str, default=os.getenv("POMS_CONFIG", ""))
     pre_args, _ = pre.parse_known_args(argv)
     config_path = (pre_args.config or "").strip() or None
+    if not config_path:
+        candidate = os.path.join(os.getcwd(), "config", "poms_worker.ini")
+        if os.path.exists(candidate):
+            config_path = candidate
 
     ini_conf: dict[str, Any] = {}
     if config_path:
@@ -806,9 +810,15 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     db.connect()
 
-    base_url = os.getenv("POMS_OLLAMA_BASE_URL") or (ini_conf.get("ollama_base_url") if ini_conf else None) or "http://localhost:11434"
+    base_url = (
+        os.getenv("POMS_OLLAMA_BASE_URL")
+        or (ini_conf.get("ollama_base_url") if ini_conf else None)
+        or "http://localhost:11434"
+    )
     model = os.getenv("POMS_OLLAMA_MODEL") or (ini_conf.get("ollama_model") if ini_conf else None) or "qwen2.5"
-    timeout_s = float(os.getenv("POMS_OLLAMA_TIMEOUT_S") or (ini_conf.get("ollama_timeout_s") if ini_conf else 120) or 120)
+    timeout_s = float(
+        os.getenv("POMS_OLLAMA_TIMEOUT_S") or (ini_conf.get("ollama_timeout_s") if ini_conf else 120) or 120
+    )
     ini_sources = ini_conf.get("sources") if ini_conf else None
     sources = _resolve_sources(ini_sources if isinstance(ini_sources, list) else [])
 
@@ -831,7 +841,3 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     worker.run_forever()
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

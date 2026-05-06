@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
-import poms_worker
+import poms.main as poms_worker
 
 
 class TestHelpers(unittest.TestCase):
