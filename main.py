@@ -3,10 +3,11 @@ from __future__ import annotations
 """
 程序入口。
 
-启动流程：
-- 读取配置（.env）
-- 初始化日志（控制台 + 文件按天滚动）
-- 初始化 DB / LLM / 各层 service
+启动流程:
+- 读取配置(.env)
+- 初始化日志(控制台 + 文件按天滚动)
+- 初始化 DB(SQLAlchemy Engine + Session)并建表
+- 初始化 LLM 客户端 / 各仓储 / 各 service
 - 启动定时任务并常驻运行
 """
 
@@ -28,86 +29,12 @@ from services.level1_service import Level1Service
 from services.level2_service import Level2Service
 
 
-def _ensure_raw_tables(db: Database) -> None:
-    """
-    启动时确保两张原始表存在（兜底建表）。
-
-    约束：
-    - 只做幂等创建（IF NOT EXISTS / ADD COLUMN IF NOT EXISTS）
-    - 不尝试变更既有列类型/约束，避免误伤已有数据
-    - 需要 DB 用户具备建表/建索引权限，否则会启动失败
-    """
-
-    ddl_statements = [
-        """
-        CREATE TABLE IF NOT EXISTS twitter_posts (
-            id BIGSERIAL PRIMARY KEY,
-            content TEXT NOT NULL,
-            author VARCHAR,
-            posted_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            is_summarized BOOLEAN NOT NULL DEFAULT FALSE
-        );
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS binance_square_posts (
-            id BIGSERIAL PRIMARY KEY,
-            content TEXT NOT NULL,
-            author VARCHAR,
-            posted_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            is_summarized BOOLEAN NOT NULL DEFAULT FALSE
-        );
-        """,
-        "ALTER TABLE twitter_posts ADD COLUMN IF NOT EXISTS is_summarized BOOLEAN NOT NULL DEFAULT FALSE;",
-        "ALTER TABLE binance_square_posts ADD COLUMN IF NOT EXISTS is_summarized BOOLEAN NOT NULL DEFAULT FALSE;",
-        """
-        DO $$
-        BEGIN
-          IF EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'twitter_posts'
-              AND column_name = 'created_at'
-              AND table_schema = ANY (current_schemas(true))
-          ) THEN
-            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_twitter_posts_is_summarized_created_at ON twitter_posts (is_summarized, created_at);';
-          ELSE
-            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_twitter_posts_is_summarized_id ON twitter_posts (is_summarized, id);';
-          END IF;
-        END $$;
-        """,
-        """
-        DO $$
-        BEGIN
-          IF EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'binance_square_posts'
-              AND column_name = 'created_at'
-              AND table_schema = ANY (current_schemas(true))
-          ) THEN
-            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_binance_square_posts_is_summarized_created_at ON binance_square_posts (is_summarized, created_at);';
-          ELSE
-            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_binance_square_posts_is_summarized_id ON binance_square_posts (is_summarized, id);';
-          END IF;
-        END $$;
-        """,
-    ]
-
-    with db.get_conn() as conn:
-        with conn.cursor() as cur:
-            for stmt in ddl_statements:
-                cur.execute(stmt)
-        conn.commit()
-
-
 def _init_logging(log_path: str, retention_days: int) -> None:
     """
-    初始化日志输出（loguru）。
+    初始化日志输出(loguru)。
 
-    - stdout：便于开发/容器查看
-    - 文件：按天滚动，保留 retention_days 天
+    - stdout:便于开发/容器查看
+    - 文件:按天滚动,保留 retention_days 天
     """
     logger.remove()
     logger.add(
@@ -134,9 +61,12 @@ def main() -> None:
     Path(settings.log_path).parent.mkdir(parents=True, exist_ok=True)
     _init_logging(settings.log_path, settings.log_retention_days)
 
-    # 初始化 DB，并确保原始表存在（避免新库启动时报“表不存在”）
+    # 初始化 DB,并通过 ORM metadata 兜底建表(幂等)。
+    # 所有表/索引定义都在 db/models.py 中,变更只需修改模型,无需手写 DDL。
     db = Database(settings)
-    _ensure_raw_tables(db)
+    db.create_all()
+    logger.info("数据库初始化完成(create_all 已执行)")
+
     ollama = OllamaClient(
         base_url=settings.ollama_base_url,
         model=settings.ollama_model,
@@ -145,7 +75,7 @@ def main() -> None:
         retry_delay_seconds=settings.ollama_retry_delay_seconds,
     )
 
-    # 仓储层：原始表（twitter/binance）与摘要表（level1/level2）
+    # 仓储层:原始表(twitter/binance)与摘要表(level1/level2)
     twitter_repo = TwitterRepo()
     binance_repo = BinanceRepo()
     level1_repo = Level1Repo()
@@ -155,7 +85,7 @@ def main() -> None:
     base_dir = Path(__file__).resolve().parent
     prompts_dir = base_dir / "prompts"
 
-    # 业务层：分别为两个 source 构建 service（互不合并）
+    # 业务层:分别为两个 source 构建 service(互不合并)
     level1_services = [
         Level1Service(
             db=db,
@@ -200,7 +130,7 @@ def main() -> None:
         ),
     ]
 
-    # 调度层：注册并启动定时任务
+    # 调度层:注册并启动定时任务
     jobs = Jobs(
         level1_services=level1_services,
         level2_services=level2_services,
@@ -208,14 +138,14 @@ def main() -> None:
         timezone=settings.timezone,
     )
     scheduler = jobs.start()
-    logger.info("服务启动成功：poll_interval={}s timezone={}", settings.poll_interval_seconds, settings.timezone)
+    logger.info("服务启动成功:poll_interval={}s timezone={}", settings.poll_interval_seconds, settings.timezone)
 
     try:
-        # BackgroundScheduler 在后台线程运行，这里只需要保持主线程常驻
+        # BackgroundScheduler 在后台线程运行,这里只需要保持主线程常驻
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
-        logger.info("收到退出信号，正在停止调度器...")
+        logger.info("收到退出信号,正在停止调度器...")
     finally:
         scheduler.shutdown(wait=False)
 

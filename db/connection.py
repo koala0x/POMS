@@ -1,101 +1,126 @@
 from __future__ import annotations
 
 """
-数据库连接管理。
+数据库连接 + 会话管理。
 
-本项目是“常驻后台服务”，数据库连接可能遇到网络抖动/连接重置：
-- 使用 psycopg2 的连接池减少频繁建连开销
-- 捕获 OperationalError 时清空连接池并短暂等待，交由上层任务下一轮重试
+基于 SQLAlchemy 2.x:
+- create_engine 创建带连接池的引擎(pool_pre_ping 自动剔除已断开连接,
+  替代了原先手写的 reconnect 逻辑)
+- sessionmaker 工厂生成 Session;通过 get_session() contextmanager 借出
+- 不在 contextmanager 里自动 commit,由 Service 层显式控制事务边界
+  (保持原有"失败时不更新标记"的语义)
 """
 
-import time
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
-import psycopg2
 from loguru import logger
-from psycopg2.pool import SimpleConnectionPool
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session, sessionmaker
 
 from config.settings import Settings
+from db.models import Base
 
 
 class Database:
     """
-    PostgreSQL 连接池包装。
+    PostgreSQL ORM 包装。
 
-    - get_conn(): 以 contextmanager 的形式借出连接
-      - autocommit=False：由上层显式 commit/rollback，保证批处理一致性
-      - 连接使用完会放回池中（或异常时关闭）
-    - reconnect(): 清空池，下一次 get_conn 会重新建立连接池
+    用法:
+        db = Database(settings)
+        db.create_all()                  # 建表(幂等)
+        with db.get_session() as session:
+            ...                          # 使用 ORM 操作
+            session.commit()             # 显式提交
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._pool: Optional[SimpleConnectionPool] = None
+        self._engine: Optional[Engine] = None
+        self._session_factory: Optional[sessionmaker[Session]] = None
 
-    def _ensure_pool(self) -> SimpleConnectionPool:
+    def _ensure(self) -> sessionmaker[Session]:
         """
-        延迟初始化连接池。
+        延迟初始化 engine + session 工厂。
 
-        服务启动后不立即建连，避免在部署时 DB 还没就绪导致启动失败；
-        第一次真正需要访问 DB 时才创建连接池。
+        服务启动时不立即建连(避免 DB 未就绪导致进程退出);
+        第一次访问时才创建,并复用给后续所有调用。
         """
-        if self._pool is not None:
-            return self._pool
+        if self._session_factory is not None:
+            return self._session_factory
 
-        dsn = (
-            f"host={self._settings.db_host} "
-            f"port={self._settings.db_port} "
-            f"dbname={self._settings.db_name} "
-            f"user={self._settings.db_user} "
-            f"password={self._settings.db_password}"
+        url = (
+            f"postgresql+psycopg2://"
+            f"{self._settings.db_user}:{self._settings.db_password}"
+            f"@{self._settings.db_host}:{self._settings.db_port}"
+            f"/{self._settings.db_name}"
         )
 
-        self._pool = SimpleConnectionPool(minconn=1, maxconn=10, dsn=dsn)
-        return self._pool
+        self._engine = create_engine(
+            url,
+            pool_size=5,
+            max_overflow=5,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            future=True,
+        )
+        self._session_factory = sessionmaker(
+            bind=self._engine,
+            expire_on_commit=False,
+            future=True,
+        )
+        return self._session_factory
+
+    @property
+    def engine(self) -> Engine:
+        """暴露底层 Engine,主要供 create_all/测试 fixture 使用。"""
+        self._ensure()
+        assert self._engine is not None
+        return self._engine
+
+    def create_all(self) -> None:
+        """
+        幂等建表:基于 ORM 模型 metadata 创建所有表与索引。
+
+        启动时调用,确保新部署或新环境无需手动跑迁移脚本。
+        """
+        Base.metadata.create_all(self.engine)
 
     def reconnect(self) -> None:
         """
-        主动丢弃当前连接池中的所有连接。
+        主动释放当前连接池中的所有连接。
 
-        典型场景：
-        - 捕获到 psycopg2.OperationalError（连接中断/重置）
-        - 连接池中可能混入不可用连接，直接 closeall() 再重建更可靠
+        典型场景:外部 DB 主备切换后,池中的连接全部失效。
+        通常 pool_pre_ping=True 已经能覆盖大多数场景,这里保留为兜底接口。
         """
-        if self._pool is None:
+        if self._engine is None:
             return
         try:
-            self._pool.closeall()
+            self._engine.dispose()
         finally:
-            self._pool = None
+            self._engine = None
+            self._session_factory = None
 
     @contextmanager
-    def get_conn(self) -> Iterator[psycopg2.extensions.connection]:
+    def get_session(self) -> Iterator[Session]:
         """
-        从连接池获取一个连接并以 contextmanager 形式返回。
+        借出一个 Session 并在结束时关闭。
 
-        注意：
-        - 只对 OperationalError 做“重连 + sleep”，其他异常交由上层处理
-        - finally 中尽量把连接放回池；如果放回失败则关闭连接
+        - 异常时自动 rollback(防止半提交事务残留)
+        - 不自动 commit:由调用方在业务逻辑成功后显式 session.commit()
+        - OperationalError(DB 连接异常)单独打日志,便于运维定位
         """
-        pool = self._ensure_pool()
-        conn = None
+        factory = self._ensure()
+        session = factory()
         try:
-            conn = pool.getconn()
-            conn.autocommit = False
-            yield conn
-        except psycopg2.OperationalError as e:
-            logger.error("数据库连接异常：{}", e)
-            self.reconnect()
-            time.sleep(5)
+            yield session
+        except OperationalError as e:
+            logger.error("数据库连接异常:{}", e)
+            session.rollback()
+            raise
+        except Exception:
+            session.rollback()
             raise
         finally:
-            if conn is not None and self._pool is not None:
-                try:
-                    if not conn.closed:
-                        pool.putconn(conn)
-                except Exception:
-                    try:
-                        conn.close()
-                    finally:
-                        pass
+            session.close()

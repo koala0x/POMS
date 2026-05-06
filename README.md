@@ -69,20 +69,16 @@ cp .env.example .env
 - BATCH_SIZE：一次摘要批大小（默认 50）
 - TIMEZONE：业务时区（用于整点窗口计算，默认 UTC）
 
-### 3) 执行数据库迁移（手动）
+### 3) 数据库表结构
 
-按顺序执行：
+启动服务时会通过 SQLAlchemy `Base.metadata.create_all()` 自动创建四张表(幂等):
 
-```sql
-\i db/migrations/001_add_is_summarized_to_twitter.sql
-\i db/migrations/002_add_is_summarized_to_binance.sql
-\i db/migrations/003_create_summary_level1.sql
-\i db/migrations/004_create_summary_level2.sql
-```
+- `twitter_posts` / `binance_square_posts`(原始数据)
+- `summary_level1`(一次摘要,`raw_ids` 为 `BIGINT[]`)
+- `summary_level2`(二次摘要,`level1_ids` 为 `BIGINT[]`)
 
-说明：
-- 001/002 会给原始表增加 `is_summarized` 字段，并创建索引；如果原始表没有 `created_at`，会退化为 `(is_summarized, id)` 索引
-- 003/004 创建摘要表，时间字段使用 `TIMESTAMPTZ`
+时间字段统一使用 `TIMESTAMP WITH TIME ZONE`。表结构定义见 `db/models.py`。
+如需修改字段或索引,直接改模型类,重启服务后会自动新增缺失的表/索引(`create_all` 不会变更已存在的表)。
 
 ### 4) 启动服务
 
