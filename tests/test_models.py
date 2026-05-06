@@ -109,17 +109,19 @@ def test_indexes_defined() -> None:
 
 def test_postgres_ddl_rendering() -> None:
     """
-    在 PostgreSQL 方言下编译 DDL,应渲染出预期的关键关键字:
-    - BIGSERIAL / BIGINT、TIMESTAMP WITH TIME ZONE、BIGINT[]
+    在 PostgreSQL 方言下编译 DDL,应渲染出预期的关键字:
+    - BIGSERIAL(自增主键)、TIMESTAMP WITH TIME ZONE、BIGINT[]
     """
     dialect = postgresql.dialect()
 
     twitter_ddl = str(CreateTable(TwitterPost.__table__).compile(dialect=dialect))
-    assert "BIGINT" in twitter_ddl  # id 列
+    assert "BIGSERIAL" in twitter_ddl  # autoincrement 主键
     assert "TIMESTAMP WITH TIME ZONE" in twitter_ddl  # created_at / posted_at
 
     level1_ddl = str(CreateTable(SummaryLevel1.__table__).compile(dialect=dialect))
     assert "BIGINT[]" in level1_ddl  # raw_ids
+    assert "TIMESTAMP WITH TIME ZONE" in level1_ddl
 
     level2_ddl = str(CreateTable(SummaryLevel2.__table__).compile(dialect=dialect))
     assert "BIGINT[]" in level2_ddl  # level1_ids
+    assert "TIMESTAMP WITH TIME ZONE" in level2_ddl
