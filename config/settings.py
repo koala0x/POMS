@@ -45,12 +45,14 @@ class Settings:
     ollama_timeout_level2: int = 1800
 
     # 重试策略(网络/解析类异常时使用,ReadTimeout 不重试)
-    ollama_retry_times: int = 3
-    ollama_retry_delay_seconds: int = 10
+    # 本地 Ollama 不会有网络抖动,失败基本是模型/输入问题,重试只会让 CPU 雪上加霜,
+    # 因此默认 retry_times=1(只跑一次,不重试),delay=0。
+    ollama_retry_times: int = 1
+    ollama_retry_delay_seconds: int = 0
 
     # ------------------------------ 业务参数 --------------------------------
     poll_interval_seconds: int = 30   # Level1 worker 空闲时的轮询间隔
-    batch_size: int = 50              # 一次摘要的批大小
+    batch_size: int = 10              # 一次摘要的批大小
 
     # ------------------------------ 日志 -----------------------------------
     log_path: str = "./logs/service.log"
