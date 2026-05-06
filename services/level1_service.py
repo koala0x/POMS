@@ -138,12 +138,12 @@ class Level1Service:
 
         prompt = template.format(items="\n\n".join(items))
         # 把 prompt 长度与开头片段记录到日志,方便排查"模型为什么这么回答"
-        logger.info(
-            "[{}] 一次摘要 prompt 长度 {} 字符,前 200 字:\n{}",
-            self.source,
-            len(prompt),
-            prompt[:200],
-        )
+        # logger.info(
+        #     "[{}] 一次摘要 prompt 长度 {} 字符,前 200 字:\n{}",
+        #     self.source,
+        #     len(prompt),
+        #     prompt[:200],
+        # )
         try:
             # 调用 LLM。失败则不落库/不标记,等待下次轮询重试。
             summary = self.ollama.chat(prompt)

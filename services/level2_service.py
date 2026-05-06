@@ -128,12 +128,12 @@ class Level2Service:
             items.append(f"{idx}. {summary}".strip())
 
         prompt = template.format(items="\n\n".join(items))
-        logger.info(
-            "[{}] 二次摘要 prompt 长度 {} 字符,前 200 字:\n{}",
-            self.source,
-            len(prompt),
-            prompt[:200],
-        )
+        # logger.info(
+        #     "[{}] 二次摘要 prompt 长度 {} 字符,前 200 字:\n{}",
+        #     self.source,
+        #     len(prompt),
+        #     prompt[:200],
+        # )
         try:
             l2_summary = self.ollama.chat(prompt)
         except Exception as e:
