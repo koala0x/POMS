@@ -61,8 +61,8 @@ class Level2Service:
                 level1_rows = self.level1_repo.fetch_unsummarized_for_period(
                     conn=conn,
                     source=self.source,
-                    period_start=period_start.replace(tzinfo=None),
-                    period_end=period_end.replace(tzinfo=None),
+                    period_start=period_start,
+                    period_end=period_end,
                 )
                 conn.commit()
         except Exception as e:
@@ -95,15 +95,15 @@ class Level2Service:
         try:
             with self.db.get_conn() as conn:
                 try:
-                    created_at = datetime.now(self.timezone).replace(tzinfo=None)
+                    created_at = datetime.now(self.timezone)
                     level2_id = self.level2_repo.insert(
                         conn=conn,
                         source=self.source,
                         summary=l2_summary,
                         level1_ids=level1_ids,
                         level1_count=len(level1_ids),
-                        period_start=period_start.replace(tzinfo=None),
-                        period_end=period_end.replace(tzinfo=None),
+                        period_start=period_start,
+                        period_end=period_end,
                         created_at=created_at,
                     )
                     updated = self.level1_repo.mark_summarized_l2(conn, level1_ids)

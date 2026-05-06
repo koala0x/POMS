@@ -100,7 +100,7 @@ class Level1Service:
         try:
             with self.db.get_conn() as conn:
                 try:
-                    now = datetime.now(self.timezone).replace(tzinfo=None)
+                    now = datetime.now(self.timezone)
                     level1_id = self.level1_repo.insert(
                         conn=conn,
                         source=self.source,

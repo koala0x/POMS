@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS summary_level1 (
     summary TEXT NOT NULL,
     raw_ids BIGINT[] NOT NULL,
     raw_count INT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     is_summarized_l2 BOOLEAN NOT NULL DEFAULT FALSE
 );
 
