@@ -16,6 +16,8 @@ from pathlib import Path
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
+from config.settings import get_settings
+from db.connection import Database
 from services.level1_service import Level1Service
 
 
@@ -110,3 +112,22 @@ def test_level1_happy_path(tmp_path: Path) -> None:
     ollama.chat.assert_called_once()
     level1_repo.insert.assert_called_once()
     raw_repo.mark_summarized.assert_called_once()
+
+
+def test_insert_twitter_posts_row() -> None:
+    """
+    向 twitter_posts 插入一条数据并提交到数据库。
+    用途：
+    - 作为“快速写入验证”的辅助方法（运行后数据库会真实新增一条记录）
+    """
+    db = Database(get_settings())
+    with db.get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO twitter_posts (content, author, posted_at)
+                VALUES (%s, %s, NOW()) RETURNING id;
+                """,
+                ("hello from test", "pytest",),
+            )
+        conn.commit()
