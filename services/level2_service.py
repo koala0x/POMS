@@ -112,6 +112,13 @@ class Level2Service:
             items.append(f"{idx}. {summary}".strip())
 
         prompt = template.format(items="\n\n".join(items))
+        # 把 prompt 长度与开头片段记录到日志,便于回溯每个整点窗口实际喂给模型的内容
+        logger.info(
+            "[{}] 二次摘要 prompt 长度 {} 字符,前 200 字:\n{}",
+            self.source,
+            len(prompt),
+            prompt[:200],
+        )
         try:
             # 调用 LLM 生成二次摘要。失败则不落库/不标记,下一小时仍可重试。
             l2_summary = self.ollama.chat(prompt)
