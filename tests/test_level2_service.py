@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+"""
+Level2Service 的单元测试。
+
+测试策略：
+- 用 Mock 替代 DB/Repo/Ollama，验证“每小时整点汇总”流程编排：
+  - 没有可处理 level1 时：不调用 LLM、不写 level2
+  - 有 level1 时：拼 prompt -> 调 LLM -> 写 level2 -> 标记 level1
+"""
+
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,23 +20,28 @@ from services.level2_service import Level2Service
 
 @contextmanager
 def _conn_ctx(conn: Mock):
+    # Database.get_conn() 是 contextmanager，这里用同样的形式模拟。
     yield conn
 
 
 @dataclass(frozen=True)
 class L1:
+    # 用于模拟 level1_repo.fetch_unsummarized_for_period 的返回对象。
     id: int
     summary: str
 
 
 def test_level2_skip_when_no_data(tmp_path: Path) -> None:
+    # 准备最小 prompt 模板。
     prompt_path = tmp_path / "p.txt"
     prompt_path.write_text("{items}", encoding="utf-8")
 
+    # db.get_conn 返回一个可用的“连接上下文”。
     conn = Mock()
     db = Mock()
     db.get_conn.return_value = _conn_ctx(conn)
 
+    # 无可处理数据时应跳过后续步骤。
     level1_repo = Mock()
     level1_repo.fetch_unsummarized_for_period.return_value = []
 
@@ -45,14 +59,17 @@ def test_level2_skip_when_no_data(tmp_path: Path) -> None:
     )
     svc.run_hourly()
 
+    # 关键断言：不会进入 LLM 或写库分支。
     ollama.chat.assert_not_called()
     level2_repo.insert.assert_not_called()
 
 
 def test_level2_happy_path(tmp_path: Path) -> None:
+    # 准备带前缀的模板，确保 format 占位符正常工作。
     prompt_path = tmp_path / "p.txt"
     prompt_path.write_text("X\n{items}", encoding="utf-8")
 
+    # run_hourly 内部会至少获取两次连接：读取 level1、写入 level2/标记。
     conn1 = Mock()
     conn2 = Mock()
     db = Mock()
@@ -79,6 +96,7 @@ def test_level2_happy_path(tmp_path: Path) -> None:
     )
     svc.run_hourly()
 
+    # 关键断言：LLM 调用、写库、标记都发生一次。
     ollama.chat.assert_called_once()
     level2_repo.insert.assert_called_once()
     level1_repo.mark_summarized_l2.assert_called_once()

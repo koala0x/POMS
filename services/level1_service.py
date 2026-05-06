@@ -3,10 +3,10 @@ from __future__ import annotations
 """
 一次摘要业务编排（Level1）。
 
-职责：
-- 每次轮询判断未处理数量是否达到 batch_size
-- 达到则拉取“最早入库/最早 id”的 batch_size 条原始数据
-- 拼接 prompt 调用 LLM 生成摘要
+做什么：
+- 轮询统计未处理数量，达到 batch_size 才触发
+- 拉取一批最早的未处理数据（优先 created_at，其次 id）
+- 生成 prompt 调用 LLM 得到摘要
 - 写入 summary_level1，并将本批原始数据标记为已处理（幂等）
 
 注意：
@@ -82,7 +82,7 @@ class Level1Service:
     timezone: ZoneInfo
 
     def run_once(self) -> None:
-        # Step 1: 先做轻量统计，避免每次轮询都去拉完整数据。
+        # 先做轻量统计，避免每次轮询都拉取完整数据。
         try:
             with self.db.get_conn() as conn:
                 cnt = self.raw_repo.count_unsummarized(conn)
@@ -95,7 +95,7 @@ class Level1Service:
             logger.info("[{}] 未处理数据不足：{}/{}", self.source, cnt, self.batch_size)
             return
 
-        # Step 2: 拉取最早的一批未处理数据。
+        # 拉取一批最早的未处理数据（批大小固定为 batch_size）。
         try:
             with self.db.get_conn() as conn:
                 posts = self.raw_repo.fetch_oldest_unsummarized(conn, self.batch_size)
@@ -113,7 +113,7 @@ class Level1Service:
             )
             return
 
-        # Step 3: 构造 prompt。模板文件里使用 {items} 占位符。
+        # 构造 prompt：模板文件使用 {items} 占位符。
         template = self.prompt_path.read_text(encoding="utf-8")
         items = []
         for idx, p in enumerate(posts, start=1):
@@ -127,7 +127,7 @@ class Level1Service:
 
         prompt = template.format(items="\n\n".join(items))
         try:
-            # Step 4: 调用 LLM。失败则直接 return，不落库/不标记，等待下次轮询重试。
+            # 调用 LLM。失败则不落库/不标记，等待下次轮询重试。
             summary = self.ollama.chat(prompt)
         except Exception as e:
             logger.error("[{}] 一次摘要失败：{}", self.source, e)
@@ -137,7 +137,7 @@ class Level1Service:
         try:
             with self.db.get_conn() as conn:
                 try:
-                    # Step 5: 同一事务内完成“写入 level1 + 标记原始表”，确保一致性。
+                    # 同一事务内完成“写入 level1 + 标记原始表”，保证一致性。
                     now = datetime.now(self.timezone)
                     level1_id = self.level1_repo.insert(
                         conn=conn,

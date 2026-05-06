@@ -3,16 +3,18 @@ from __future__ import annotations
 """
 原始帖子表（twitter_posts / binance_square_posts）仓储基类。
 
-现实情况：
-- 两张原始表是“已有表”，字段名可能和需求文档略有差异
-- 某些环境可能没有 posted_at / author / created_at 等字段
+要解决的问题：
+- 原始表可能在不同 schema（不一定在当前 search_path）
+- 字段命名可能不一致，甚至缺少 author/posted_at/created_at
+- 仍要保证批处理“稳定可重复”（排序可复现、更新幂等）
 
-本基类会在首次访问时探测表结构并做字段映射：
-- 必须存在 id（作为主键/稳定排序）
-- content/is_summarized 尽量匹配，否则使用默认字段名（若不存在则会在 SQL 执行时报错）
-- created_at 不存在时按 id 排序，保证批处理可重复/稳定
+做法：
+- 首次访问时从 information_schema 探测表结构并缓存字段映射
+- 表不在 search_path 时尝试定位 schema（public 优先；多 schema 则报错提示）
+- created_at 缺失时退化为按主键列排序
 
-同时为防止 SQL 注入，表名/列名仅允许安全标识符模式，并通过 psycopg2.sql.Identifier 拼接。
+安全性：
+- 表名/列名只允许安全标识符，并通过 psycopg2.sql.Identifier 拼接，避免 SQL 注入
 """
 
 import re
@@ -48,8 +50,6 @@ _SAFE_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 def _pick_first(existing: set[str], candidates: Sequence[str]) -> str | None:
     """
     从 candidates 中按顺序选出第一个存在于 existing 的列名。
-
-    这是“弱兼容”策略：尽量适配不同数据源/历史版本的字段命名。
     """
     for c in candidates:
         if c in existing:
@@ -65,8 +65,7 @@ class RawPostsRepoBase:
     """
 
     def __init__(self, table_name: str) -> None:
-        # table_name 来自代码写死的常量（twitter_posts / binance_square_posts）。
-        # 仍然做一次白名单正则校验，防止后续维护中误用字符串拼接导致风险。
+        # table_name 来自代码常量（twitter_posts / binance_square_posts），仍做一次校验。
         self._table_name = table_name
         self._schema: str | None = None
         self._loaded = False
@@ -78,19 +77,19 @@ class RawPostsRepoBase:
         self._is_summarized_col: str = "is_summarized"
 
     def _table_identifier(self) -> sql.Composed:
+        # 已定位 schema 时使用 schema.table，避免依赖 search_path。
         if self._schema:
             return sql.Identifier(self._schema, self._table_name)
         return sql.Identifier(self._table_name)
 
     def _ensure_loaded(self, conn: psycopg2.extensions.connection) -> None:
-        # 首次调用时探测表结构并确定列映射；后续直接复用映射结果。
+        # 首次调用时探测表结构并确定列映射；后续直接复用结果。
         if self._loaded:
             return
 
         if not _SAFE_IDENT_RE.match(self._table_name):
             raise ValueError(f"非法表名：{self._table_name}")
 
-        cols: set[str] = set()
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -115,7 +114,7 @@ class RawPostsRepoBase:
                 )
                 schemas = [row[0] for row in cur.fetchall()]
                 if not schemas:
-                    raise RuntimeError(f"{self._table_name} 表不存在或当前连接的数据库里没有该表")
+                    raise RuntimeError(f"{self._table_name} 表不存在（或当前连接的数据库里没有该表）")
 
                 if "public" in schemas:
                     self._schema = "public"
