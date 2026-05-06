@@ -28,6 +28,82 @@ from services.level1_service import Level1Service
 from services.level2_service import Level2Service
 
 
+def _ensure_raw_tables(db: Database) -> None:
+    """
+    启动时确保原始数据表存在。
+
+    需求侧是“原始表已存在”，但实际部署时可能新库还没建表；
+    因此这里做一次自检与兜底建表，避免服务启动后一直报“表不存在”。
+
+    约定：
+    - 仅在表不存在时创建；表已存在则不做破坏性变更
+    - 同时确保 is_summarized 字段存在（幂等）
+    """
+
+    ddl_statements = [
+        """
+        CREATE TABLE IF NOT EXISTS twitter_posts (
+            id BIGSERIAL PRIMARY KEY,
+            content TEXT NOT NULL,
+            author VARCHAR,
+            posted_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            is_summarized BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS binance_square_posts (
+            id BIGSERIAL PRIMARY KEY,
+            content TEXT NOT NULL,
+            author VARCHAR,
+            posted_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            is_summarized BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        """,
+        "ALTER TABLE twitter_posts ADD COLUMN IF NOT EXISTS is_summarized BOOLEAN NOT NULL DEFAULT FALSE;",
+        "ALTER TABLE binance_square_posts ADD COLUMN IF NOT EXISTS is_summarized BOOLEAN NOT NULL DEFAULT FALSE;",
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'twitter_posts'
+              AND column_name = 'created_at'
+              AND table_schema = ANY (current_schemas(true))
+          ) THEN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_twitter_posts_is_summarized_created_at ON twitter_posts (is_summarized, created_at);';
+          ELSE
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_twitter_posts_is_summarized_id ON twitter_posts (is_summarized, id);';
+          END IF;
+        END $$;
+        """,
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'binance_square_posts'
+              AND column_name = 'created_at'
+              AND table_schema = ANY (current_schemas(true))
+          ) THEN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_binance_square_posts_is_summarized_created_at ON binance_square_posts (is_summarized, created_at);';
+          ELSE
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_binance_square_posts_is_summarized_id ON binance_square_posts (is_summarized, id);';
+          END IF;
+        END $$;
+        """,
+    ]
+
+    with db.get_conn() as conn:
+        with conn.cursor() as cur:
+            for stmt in ddl_statements:
+                cur.execute(stmt)
+        conn.commit()
+
+
 def _init_logging(log_path: str, retention_days: int) -> None:
     """
     初始化 loguru 日志：
@@ -61,6 +137,7 @@ def main() -> None:
 
     # 基础依赖（DB / LLM）
     db = Database(settings)
+    _ensure_raw_tables(db)
     ollama = OllamaClient(
         base_url=settings.ollama_base_url,
         model=settings.ollama_model,

@@ -68,6 +68,7 @@ class RawPostsRepoBase:
         # table_name 来自代码写死的常量（twitter_posts / binance_square_posts）。
         # 仍然做一次白名单正则校验，防止后续维护中误用字符串拼接导致风险。
         self._table_name = table_name
+        self._schema: str | None = None
         self._loaded = False
         self._id_col: str = "id"
         self._content_col: str = "content"
@@ -75,6 +76,11 @@ class RawPostsRepoBase:
         self._posted_at_col: str | None = "posted_at"
         self._created_at_col: str | None = "created_at"
         self._is_summarized_col: str = "is_summarized"
+
+    def _table_identifier(self) -> sql.Composed:
+        if self._schema:
+            return sql.Identifier(self._schema, self._table_name)
+        return sql.Identifier(self._table_name)
 
     def _ensure_loaded(self, conn: psycopg2.extensions.connection) -> None:
         # 首次调用时探测表结构并确定列映射；后续直接复用映射结果。
@@ -84,6 +90,7 @@ class RawPostsRepoBase:
         if not _SAFE_IDENT_RE.match(self._table_name):
             raise ValueError(f"非法表名：{self._table_name}")
 
+        cols: set[str] = set()
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -96,8 +103,40 @@ class RawPostsRepoBase:
             )
             cols = {row[0] for row in cur.fetchall()}
 
-        if not cols:
-            raise RuntimeError(f"{self._table_name} 表不存在或不在当前 schema/search_path")
+            if not cols:
+                cur.execute(
+                    """
+                    SELECT table_schema
+                    FROM information_schema.tables
+                    WHERE table_name = %s
+                      AND table_type = 'BASE TABLE';
+                    """,
+                    (self._table_name,),
+                )
+                schemas = [row[0] for row in cur.fetchall()]
+                if not schemas:
+                    raise RuntimeError(f"{self._table_name} 表不存在或当前连接的数据库里没有该表")
+
+                if "public" in schemas:
+                    self._schema = "public"
+                elif len(schemas) == 1:
+                    self._schema = schemas[0]
+                else:
+                    raise RuntimeError(
+                        f"{self._table_name} 表存在于多个 schema：{', '.join(sorted(schemas))}，"
+                        f"请调整 search_path 或将表移动/重命名以保证唯一"
+                    )
+
+                cur.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = %s
+                      AND table_schema = %s;
+                    """,
+                    (self._table_name, self._schema),
+                )
+                cols = {row[0] for row in cur.fetchall()}
 
         id_col = _pick_first(
             cols,
@@ -150,7 +189,7 @@ class RawPostsRepoBase:
         # 打印一次映射结果，便于上线后快速确认“实际字段”与“代码预期”是否一致。
         logger.info(
             "[{}] 字段映射：id={} content={} author={} posted_at={} created_at={} flag={}",
-            self._table_name,
+            f"{self._schema + '.' if self._schema else ''}{self._table_name}",
             self._id_col,
             self._content_col,
             self._author_col,
@@ -164,7 +203,7 @@ class RawPostsRepoBase:
         # 统计未处理条数，用于决定是否触发一次摘要（>= batch_size）。
         self._ensure_loaded(conn)
         q = sql.SQL("SELECT COUNT(1) FROM {t} WHERE {flag} = FALSE;").format(
-            t=sql.Identifier(self._table_name),
+            t=self._table_identifier(),
             flag=sql.Identifier(self._is_summarized_col),
         )
         with conn.cursor() as cur:
@@ -214,7 +253,7 @@ class RawPostsRepoBase:
             author_col=author_expr,
             posted_at_col=posted_at_expr,
             created_at_col=created_at_expr,
-            t=sql.Identifier(self._table_name),
+            t=self._table_identifier(),
             flag=sql.Identifier(self._is_summarized_col),
             order_by=order_by_expr,
         )
@@ -236,7 +275,7 @@ class RawPostsRepoBase:
             WHERE {id_col} = ANY(%s) AND {flag} = FALSE;
             """
         ).format(
-            t=sql.Identifier(self._table_name),
+            t=self._table_identifier(),
             id_col=sql.Identifier(self._id_col),
             flag=sql.Identifier(self._is_summarized_col),
         )
