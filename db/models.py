@@ -88,6 +88,55 @@ class BinanceSquarePost(_RawPostMixin, Base):
     )
 
 
+class DiscordMessage(Base):
+    """
+    Discord 聊天记录表。
+
+    字段语义与 _RawPostMixin 一致(id / content / posted_at / created_at / is_summarized),
+    但 Discord 的"作者"由 channel_name + username 共同构成,所以单独建模而不复用 mixin:
+    - channel_name:频道名(例如 #alpha-calls)
+    - username:发言用户名
+
+    为了让 Level1Service 现有 prompt 渲染逻辑(读 author / posted_at)无差别复用,
+    暴露一个只读 author 派生属性:`#<channel_name> @<username>`。
+    """
+
+    __tablename__ = "discord_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    channel_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    posted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    is_summarized: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_discord_messages_summarized_created_at",
+            "is_summarized",
+            "created_at",
+        ),
+        Index("idx_discord_messages_channel_created_at", "channel_name", "created_at"),
+    )
+
+    @property
+    def author(self) -> str:
+        # Level1Service 的 prompt 拼接默认读 .author,这里把频道+用户名拼成可读串
+        return f"#{self.channel_name} @{self.username}"
+
+
 class SummaryLevel1(Base):
     """
     一次摘要表。
@@ -164,6 +213,7 @@ __all__ = [
     "Base",
     "TwitterPost",
     "BinanceSquarePost",
+    "DiscordMessage",
     "SummaryLevel1",
     "SummaryLevel2",
 ]

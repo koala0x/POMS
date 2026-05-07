@@ -20,6 +20,7 @@ from loguru import logger
 from config.settings import get_settings
 from db.connection import Database
 from db.repositories.binance_repo import BinanceRepo
+from db.repositories.discord_repo import DiscordRepo
 from db.repositories.level1_repo import Level1Repo
 from db.repositories.level2_repo import Level2Repo
 from db.repositories.twitter_repo import TwitterRepo
@@ -91,9 +92,10 @@ def main() -> None:
         settings.ollama_timeout_level2,
     )
 
-    # 仓储层:原始表(twitter/binance)与摘要表(level1/level2)
+    # 仓储层:原始表(twitter/binance/discord)与摘要表(level1/level2)
     twitter_repo = TwitterRepo()
     binance_repo = BinanceRepo()
+    discord_repo = DiscordRepo()
     level1_repo = Level1Repo()
     level2_repo = Level2Repo()
 
@@ -123,6 +125,16 @@ def main() -> None:
             prompt_path=prompts_dir / "level1_binance.txt",
             timezone=settings.timezone,
         ),
+        Level1Service(
+            db=db,
+            source="discord",
+            batch_size=settings.batch_size,
+            raw_repo=discord_repo,
+            level1_repo=level1_repo,
+            ollama=ollama_l1,
+            prompt_path=prompts_dir / "level1_discord.txt",
+            timezone=settings.timezone,
+        ),
     ]
 
     level2_services = [
@@ -144,6 +156,16 @@ def main() -> None:
             level2_repo=level2_repo,
             ollama=ollama_l2,
             prompt_path=prompts_dir / "level2_binance.txt",
+            timezone=settings.timezone,
+        ),
+        Level2Service(
+            db=db,
+            source="discord",
+            threshold=settings.level2_threshold,
+            level1_repo=level1_repo,
+            level2_repo=level2_repo,
+            ollama=ollama_l2,
+            prompt_path=prompts_dir / "level2_discord.txt",
             timezone=settings.timezone,
         ),
     ]
