@@ -107,10 +107,10 @@
 python api_main.py
 
 # 生产(多 worker)
-gunicorn -w 4 -b 0.0.0.0:8080 'api_main:app'
+gunicorn -w 4 -b 0.0.0.0:18089 'api_main:app'
 ```
 
-监听地址/端口在 `config/settings.py` 的 `api_host` / `api_port`,默认 `0.0.0.0:8080`。
+监听地址/端口在 `config/settings.py` 的 `api_host` / `api_port`,默认 `0.0.0.0:18089`。
 
 ### `POST /ingest`
 
