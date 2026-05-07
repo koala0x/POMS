@@ -64,6 +64,12 @@ class Settings:
     log_path: str = "./logs/service.log"
     log_retention_days: int = 30
 
+    # ------------------------------ HTTP 接入 -------------------------------
+    # api_main.py 启动的数据接入服务监听地址。0.0.0.0 表示对外暴露,
+    # 内网/本机部署可改成 127.0.0.1 仅限本地访问。
+    api_host: str = "0.0.0.0"
+    api_port: int = 8080
+
     # ------------------------------ 时区 -----------------------------------
     # 时间戳写库时统一带 tz;period_start/period_end 等字段也用它构造。
     # frozen dataclass 中可变默认必须用 default_factory
