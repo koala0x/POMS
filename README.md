@@ -167,7 +167,7 @@ DB 写入失败整批回滚**,不会出现"半批成功"。
 
 ```bash
 # 提交 5 条 Twitter
-curl -X POST http://localhost:8080/ingest \
+curl -X POST http://localhost:18089/ingest \
   -H 'Content-Type: application/json' \
   -d '{
     "source": "twitter",
@@ -182,12 +182,12 @@ curl -X POST http://localhost:8080/ingest \
 # {"inserted":5,"ok":true,"source":"twitter"}
 
 # 提交 10 条币安广场
-curl -X POST http://localhost:8080/ingest \
+curl -X POST http://localhost:18089/ingest \
   -H 'Content-Type: application/json' \
   -d '{"source":"binance_square","items":[ {"content":"..."}, ... ]}'
 
 # 提交 50 条 Discord
-curl -X POST http://localhost:8080/ingest \
+curl -X POST http://localhost:18089/ingest \
   -H 'Content-Type: application/json' \
   -d '{
     "source": "discord",
@@ -203,7 +203,7 @@ curl -X POST http://localhost:8080/ingest \
 # Python requests 示例
 import requests
 requests.post(
-    "http://localhost:8080/ingest",
+    "http://localhost:18089/ingest",
     json={
         "source": "discord",
         "items": [
@@ -309,7 +309,7 @@ ORM 模型定义在 `db/models.py`,服务启动时通过 `Base.metadata.create_a
 | `level2_threshold` | `5` | 二次摘要触发阈值 |
 | `log_path` | `./logs/service.log` | 日志路径 |
 | `log_retention_days` | `30` | 日志保留天数 |
-| `api_host` / `api_port` | `0.0.0.0` / `8080` | HTTP 接入服务监听 |
+| `api_host` / `api_port` | `0.0.0.0` / `18089` | HTTP 接入服务监听 |
 | `timezone` | `UTC` | 业务时区(整点窗口计算用) |
 
 ## 安装与运行
@@ -353,7 +353,7 @@ python3 main.py
 ### 3) 部署建议
 
 - **进程托管**:`systemd` / `supervisor` 给两个进程各起一个 unit,意外退出自动拉起
-- **HTTP 服务**:生产环境用 `gunicorn -w 4 -b 0.0.0.0:8080 'api_main:app'`
+- **HTTP 服务**:生产环境用 `gunicorn -w 4 -b 0.0.0.0:18089 'api_main:app'`
 - **幂等保证**:`is_summarized` / `is_summarized_l2` 标记位 + 失败不更新策略,
   worker 可随意重启
 - **DB 主备切换**:`pool_pre_ping=True` 已经能覆盖大多数情形
@@ -448,7 +448,7 @@ python3 -m pytest -q
 启动两个进程后,直接 POST `/ingest` 灌入 ≥ `batch_size` 条数据:
 
 ```bash
-curl -X POST http://localhost:8080/ingest \
+curl -X POST http://localhost:18089/ingest \
   -H 'Content-Type: application/json' \
   -d "$(python3 -c '
 import json
