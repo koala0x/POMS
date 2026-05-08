@@ -23,16 +23,23 @@ from db.models import (
 
 
 def test_tables_registered() -> None:
-    """四张业务表都应注册在 metadata 上。"""
-    expected = {"twitter_posts", "binance_square_posts", "summary_level1", "summary_level2"}
+    """五张业务表都应注册在 metadata 上。"""
+    expected = {
+        "twitter_posts",
+        "binance_square_posts",
+        "discord_messages",
+        "summary_level1",
+        "summary_level2",
+    }
     assert expected == set(Base.metadata.tables.keys())
 
 
 def test_raw_post_mixin_shared_columns() -> None:
-    """Twitter / Binance 两表必须有相同的列集合。"""
-    twitter_cols = {c.name for c in inspect(TwitterPost).columns}
-    binance_cols = {c.name for c in inspect(BinanceSquarePost).columns}
-    assert twitter_cols == binance_cols == {
+    """
+    Twitter / Binance 两表都应包含 mixin 的核心列;
+    Twitter 额外多一列 tweet_id(用于 list 抓取去重),Binance 不需要。
+    """
+    mixin_cols = {
         "id",
         "content",
         "author",
@@ -40,6 +47,22 @@ def test_raw_post_mixin_shared_columns() -> None:
         "created_at",
         "is_summarized",
     }
+    twitter_cols = {c.name for c in inspect(TwitterPost).columns}
+    binance_cols = {c.name for c in inspect(BinanceSquarePost).columns}
+    assert binance_cols == mixin_cols
+    assert twitter_cols == mixin_cols | {"tweet_id"}
+
+
+def test_twitter_tweet_id_unique() -> None:
+    """tweet_id 必须有 UNIQUE 约束,fetcher 才能依赖 ON CONFLICT 做去重。"""
+    table = TwitterPost.__table__
+    unique_cols = {
+        tuple(c.name for c in uc.columns)
+        for uc in table.constraints
+        if uc.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("tweet_id",) in unique_cols
+    assert table.c.tweet_id.nullable is True  # 兼容老路径,可空
 
 
 def test_raw_post_constraints() -> None:

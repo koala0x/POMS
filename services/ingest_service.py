@@ -7,14 +7,21 @@ from __future__ import annotations
 并在单个事务内批量入库。失败整批回滚,避免出现"半批"数据。
 
 字段约定:
-- twitter / binance_square: content(必填) / author(可选) / posted_at(可选, ISO 8601)
+- twitter: content(必填) / author(可选) / posted_at(可选, ISO 8601) / tweet_id(可选, 推文原生 ID)
+- binance_square: content(必填) / author(可选) / posted_at(可选, ISO 8601)
 - discord: content / channel_name / username(均必填) / posted_at(可选, ISO 8601)
 
 posted_at 不传或解析失败时置为 None,由摘要侧用 created_at 兜底。
+
+twitter 单独走 PostgreSQL 的 INSERT ... ON CONFLICT (tweet_id) DO NOTHING,
+保证抓取脚本重复跑不会因 UniqueViolation 整批回滚。binance / discord 仍走
+原本的 session.add_all(),语义不变。
 """
 
 from datetime import datetime, timezone
 from typing import Any
+
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from db.connection import Database
 from db.models import BinanceSquarePost, DiscordMessage, TwitterPost
@@ -48,19 +55,37 @@ def _parse_posted_at(raw: Any) -> datetime | None:
     return dt
 
 
-def _build_raw_post(source: str, item: dict) -> TwitterPost | BinanceSquarePost:
-    model = _RAW_MODEL_BY_SOURCE[source]
+def _common_raw_fields(item: dict) -> dict:
+    """提取 twitter / binance_square 共有字段(content / author / posted_at)的校验逻辑。"""
     content = item.get("content")
     if not isinstance(content, str) or not content.strip():
         raise IngestError("content 必填且为非空字符串")
     author = item.get("author")
     if author is not None and not isinstance(author, str):
         raise IngestError("author 必须是字符串或省略")
-    return model(
-        content=content,
-        author=author,
-        posted_at=_parse_posted_at(item.get("posted_at")),
-    )
+    return {
+        "content": content,
+        "author": author,
+        "posted_at": _parse_posted_at(item.get("posted_at")),
+    }
+
+
+def _build_twitter_row(item: dict) -> dict:
+    """twitter 走 Core insert,所以这里直接返回 dict 而不是 ORM 实例。"""
+    fields = _common_raw_fields(item)
+    tweet_id = item.get("tweet_id")
+    if tweet_id is not None:
+        # 强制成 str:Twitter 的 snowflake 在大多数语言里都按字符串传,但 JSON 里偶尔会是 int
+        if not isinstance(tweet_id, (str, int)) or (isinstance(tweet_id, str) and not tweet_id.strip()):
+            raise IngestError("tweet_id 必须是非空字符串或整数")
+        fields["tweet_id"] = str(tweet_id)
+    else:
+        fields["tweet_id"] = None
+    return fields
+
+
+def _build_binance_row(item: dict) -> BinanceSquarePost:
+    return BinanceSquarePost(**_common_raw_fields(item))
 
 
 def _build_discord_message(item: dict) -> DiscordMessage:
@@ -85,8 +110,8 @@ class IngestService:
     """
     接收外部提交的原始数据并批量入库。
 
-    单次请求只处理一种 source,内部用一个事务 + add_all 完成批量插入,
-    失败整批回滚以避免半批写入。
+    单次请求只处理一种 source,内部用一个事务完成批量插入,失败整批回滚以避免半批写入。
+    twitter 走 ON CONFLICT (tweet_id) DO NOTHING,保证同一条推文重复提交不会失败。
     """
 
     SUPPORTED_SOURCES = ("twitter", "binance_square", "discord")
@@ -104,12 +129,34 @@ class IngestService:
         if not items:
             return 0
 
+        if source == "twitter":
+            return self._ingest_twitter(items)
         if source == "discord":
-            rows = [_build_discord_message(it) for it in items]
-        else:
-            rows = [_build_raw_post(source, it) for it in items]
+            return self._ingest_orm([_build_discord_message(it) for it in items])
+        # binance_square
+        return self._ingest_orm([_build_binance_row(it) for it in items])
 
+    def _ingest_orm(self, rows: list) -> int:
         with self._db.get_session() as session:
             session.add_all(rows)
             session.commit()
         return len(rows)
+
+    def _ingest_twitter(self, items: list[dict]) -> int:
+        """
+        twitter 走 Core insert + ON CONFLICT (tweet_id) DO NOTHING。
+
+        - 没传 tweet_id 的行:tweet_id 为 NULL,PG 默认 NULL ≠ NULL,不冲突,正常插入。
+        - 传了 tweet_id 的行:同 tweet_id 已存在则跳过,返回值反映实际新增行数。
+        """
+        rows = [_build_twitter_row(it) for it in items]
+        stmt = (
+            pg_insert(TwitterPost)
+            .values(rows)
+            .on_conflict_do_nothing(index_elements=["tweet_id"])
+        )
+        with self._db.get_session() as session:
+            result = session.execute(stmt)
+            session.commit()
+        # rowcount 为实际写入行数(冲突跳过的不算)
+        return int(result.rowcount or 0)

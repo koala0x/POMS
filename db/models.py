@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -66,12 +67,19 @@ class TwitterPost(_RawPostMixin, Base):
     """Twitter 原始帖子表。"""
 
     __tablename__ = "twitter_posts"
+
+    # Twitter 推文的原生 ID(字符串,Twitter 用 snowflake)。可空以兼容老抓取路径,
+    # 但只要传入就走 UNIQUE 约束 + ON CONFLICT 去重(scripts/fetch_twitter_list.py 用)。
+    # 多个 NULL 在 PostgreSQL 默认行为下不冲突,所以历史数据不需要回填。
+    tweet_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     __table_args__ = (
         Index(
             "idx_twitter_posts_summarized_created_at",
             "is_summarized",
             "created_at",
         ),
+        UniqueConstraint("tweet_id", name="uq_twitter_posts_tweet_id"),
     )
 
 

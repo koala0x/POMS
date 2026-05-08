@@ -70,6 +70,19 @@ class Settings:
     api_host: str = "0.0.0.0"
     api_port: int = 18089
 
+    # ------------------------------ Twitter List 抓取 -----------------------
+    # scripts/fetch_twitter_list.py 调 twitterapi.io 拉某个 List 的推文,
+    # 拿到后走 ingest_url 提交回本服务的 /ingest。
+    # twitterapi_io_key:在 https://twitterapi.io/dashboard 拿到的 API Key,
+    #   占位是 "YOUR_API_KEY",**部署前请替换为真实 key**。
+    # twitter_list_id:目标 List 的数字 ID,例如 https://x.com/i/lists/<id> 的 <id>。
+    # twitter_list_max_pages:单次运行最多翻多少页(每页 ~20 条),防止一次烧掉过多 API 费用。
+    # ingest_url:抓取脚本回投的 /ingest 地址,默认走本机的 api_main.py 监听端口。
+    twitterapi_io_key: str = "YOUR_API_KEY"
+    twitter_list_id: str = "1898760983553974442"
+    twitter_list_max_pages: int = 10
+    ingest_url: str = "http://127.0.0.1:18089/ingest"
+
     # ------------------------------ 时区 -----------------------------------
     # 时间戳写库时统一带 tz;period_start/period_end 等字段也用它构造。
     # frozen dataclass 中可变默认必须用 default_factory
