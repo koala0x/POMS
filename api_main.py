@@ -57,6 +57,8 @@ def _build_fetcher_loop(
     return TwitterFetcherLoop(
         fetcher=fetcher,
         interval_seconds=settings.twitter_list_fetch_interval_seconds,
+        retry_times=settings.twitter_list_retry_times,
+        retry_delay_seconds=settings.twitter_list_retry_delay_seconds,
     )
 
 
@@ -92,10 +94,12 @@ def main() -> None:
     fetcher_loop = _build_fetcher_loop(_settings, _db, _ingest_service)
     fetcher_loop.start()
     logger.info(
-        "Twitter 抓取后台 loop 已启动:间隔 {}s,List={} max_pages={}",
+        "Twitter 抓取后台 loop 已启动:间隔 {}s,List={} max_pages={} retry={}x@{}s",
         _settings.twitter_list_fetch_interval_seconds,
         _settings.twitter_list_id,
         _settings.twitter_list_max_pages,
+        _settings.twitter_list_retry_times,
+        _settings.twitter_list_retry_delay_seconds,
     )
 
     try:

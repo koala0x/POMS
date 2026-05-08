@@ -35,6 +35,20 @@ _KNOWN_IDS_LOOKBACK = 500
 _TWITTER_DATE_FMT = "%a %b %d %H:%M:%S %z %Y"
 
 
+class TwitterFetchPermanentError(Exception):
+    """
+    不可重试的错误。
+
+    典型场景:
+    - 401 / 403:API key 错或权限不足,重试也不会变好
+    - 404:list_id 不存在 / 已删除
+    - 400:请求参数不合法
+
+    loop 收到这种异常会立刻放弃当轮重试,等下一个 interval。
+    429(限流)和 5xx 不算这一类,它们走可重试路径。
+    """
+
+
 def _parse_twitter_created_at(raw: str | None) -> str | None:
     """把 Twitter 的英文日期串转成 ISO 8601;解析失败返回 None,业务侧用 created_at 兜底。"""
     if not raw:
@@ -161,7 +175,10 @@ class TwitterListFetcherService:
         停止条件:
         - 翻到 max_pages
         - 上游返回 has_next_page=false 或 next_cursor 为空
-        - HTTP 非 200(打日志,直接抛出,由 loop 兜底捕获)
+
+        异常:
+        - 4xx(非 429): 抛 TwitterFetchPermanentError, loop 不重试
+        - 5xx / 429 / 网络错: 抛 requests.RequestException(或子类), loop 重试
         """
         cursor = ""
         headers = {"x-api-key": self._api_key}
@@ -174,13 +191,20 @@ class TwitterListFetcherService:
                 params=params,
                 timeout=30,
             )
-            if resp.status_code != 200:
+            status = resp.status_code
+            if status != 200:
                 # 把响应体一起打出来,排查 401/403/429 都靠这一行
                 logger.error(
                     "twitterapi.io 调用失败: status={} body={!r}",
-                    resp.status_code,
+                    status,
                     resp.text[:500],
                 )
+                # 4xx 且不是 429:配置/权限问题,重试也救不了 → 永久错误
+                if 400 <= status < 500 and status != 429:
+                    raise TwitterFetchPermanentError(
+                        f"twitterapi.io 返回 {status},不可重试: {resp.text[:200]}"
+                    )
+                # 5xx / 429 / 其它非 200 → 走可重试路径
                 resp.raise_for_status()
             body = resp.json()
             yield body.get("tweets") or []

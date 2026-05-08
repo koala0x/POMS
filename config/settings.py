@@ -80,10 +80,16 @@ class Settings:
     # twitter_list_id:目标 List 的数字 ID,例如 https://x.com/i/lists/<id> 的 <id>。
     # twitter_list_max_pages:单轮最多翻多少页(每页 ~20 条),控制单次成本上限。
     # twitter_list_fetch_interval_seconds:轮询间隔,默认 1800(30 分钟)。
+    # twitter_list_retry_times:**单轮内**遇到可重试错误(超时 / 5xx / 429 / DB 抖动)
+    #   时的最大尝试次数,含首次,默认 3。4xx(401/403/404 等不可恢复错误)不消耗重试。
+    # twitter_list_retry_delay_seconds:重试之间的固定间隔,默认 180(3 分钟),
+    #   用 stop_event.wait 实现,shutdown 时能立即唤醒不会拖慢退出。
     twitterapi_io_key: str = "new1_3c489f5d8d7d497f8fd6f1a64ef20134"
     twitter_list_id: str = "1898760983553974442"
     twitter_list_max_pages: int = 20
     twitter_list_fetch_interval_seconds: int = 1800
+    twitter_list_retry_times: int = 3
+    twitter_list_retry_delay_seconds: int = 180
 
     # ------------------------------ 时区 -----------------------------------
     # 时间戳写库时统一带 tz;period_start/period_end 等字段也用它构造。
