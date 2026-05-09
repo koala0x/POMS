@@ -29,14 +29,14 @@ class Settings:
     """
 
     # ------------------------------ PostgreSQL ------------------------------
-    db_host: str = "127.0.0.1"
+    db_host: str = "192.168.1.219"
     db_port: int = 5432
     db_name: str = "all_new"
     db_user: str = "all_new"
     db_password: str = "123qwe"
 
     # ------------------------------ Ollama 服务 ------------------------------
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str = "http://192.168.1.219:11434"
 
     # 一次摘要(每 30s 触发,频繁) → 推荐轻量模型
     ollama_model_level1: str = "qwen3:8b"
