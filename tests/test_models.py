@@ -37,7 +37,7 @@ def test_tables_registered() -> None:
 def test_raw_post_mixin_shared_columns() -> None:
     """
     Twitter / Binance 两表都应包含 mixin 的核心列;
-    Twitter 额外多一列 tweet_id(用于 list 抓取去重),Binance 不需要。
+    Twitter / Binance 各自多一列原生 ID(tweet_id / post_id),用于抓取侧去重。
     """
     mixin_cols = {
         "id",
@@ -49,7 +49,7 @@ def test_raw_post_mixin_shared_columns() -> None:
     }
     twitter_cols = {c.name for c in inspect(TwitterPost).columns}
     binance_cols = {c.name for c in inspect(BinanceSquarePost).columns}
-    assert binance_cols == mixin_cols
+    assert binance_cols == mixin_cols | {"post_id"}
     assert twitter_cols == mixin_cols | {"tweet_id"}
 
 
@@ -63,6 +63,18 @@ def test_twitter_tweet_id_unique() -> None:
     }
     assert ("tweet_id",) in unique_cols
     assert table.c.tweet_id.nullable is True  # 兼容老路径,可空
+
+
+def test_binance_post_id_unique() -> None:
+    """post_id 必须有 UNIQUE 约束,抓取脚本可依赖 ON CONFLICT 做去重。"""
+    table = BinanceSquarePost.__table__
+    unique_cols = {
+        tuple(c.name for c in uc.columns)
+        for uc in table.constraints
+        if uc.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("post_id",) in unique_cols
+    assert table.c.post_id.nullable is True  # 兼容老路径,可空
 
 
 def test_raw_post_constraints() -> None:

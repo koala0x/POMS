@@ -136,6 +136,8 @@ Content-Type: application/json
 | content | string | ✅ | 帖子正文(非空) |
 | author | string | ❌ | 作者,缺失则入库为 NULL |
 | posted_at | string (ISO 8601) | ❌ | 发帖时间;支持 `Z` 与 `+08:00` 后缀;缺失则入库为 NULL |
+| tweet_id | string / int | ❌ | 仅 `twitter` 使用;传入后走 UNIQUE + ON CONFLICT 去重 |
+| post_id | string / int | ❌ | 仅 `binance_square` 使用;传入后走 UNIQUE + ON CONFLICT 去重 |
 
 #### discord
 
@@ -236,6 +238,8 @@ ORM 模型定义在 `db/models.py`,服务启动时通过 `Base.metadata.create_a
 | posted_at | TIMESTAMPTZ | 发帖时间 |
 | created_at | TIMESTAMPTZ NOT NULL DEFAULT NOW() | 入库时间 |
 | is_summarized | BOOLEAN NOT NULL DEFAULT FALSE | 是否已被一次摘要处理 |
+| tweet_id | VARCHAR(64) UNIQUE | 仅 `twitter_posts`:推文原生 ID,抓取侧去重用 |
+| post_id | VARCHAR(64) UNIQUE | 仅 `binance_square_posts`:币安广场帖子原生 ID,抓取侧去重用 |
 
 索引:`(is_summarized, created_at)`
 

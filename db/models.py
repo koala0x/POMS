@@ -87,12 +87,18 @@ class BinanceSquarePost(_RawPostMixin, Base):
     """币安广场原始帖子表。"""
 
     __tablename__ = "binance_square_posts"
+
+    # 币安广场帖子的原生 ID(字符串)。可空以兼容老抓取路径,传入时走 UNIQUE + ON CONFLICT 去重。
+    # 与 twitter_posts.tweet_id 设计一致:多个 NULL 在 PostgreSQL 默认行为下不冲突,历史数据无需回填。
+    post_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     __table_args__ = (
         Index(
             "idx_binance_square_posts_summarized_created_at",
             "is_summarized",
             "created_at",
         ),
+        UniqueConstraint("post_id", name="uq_binance_square_posts_post_id"),
     )
 
 

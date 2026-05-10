@@ -8,14 +8,13 @@ from __future__ import annotations
 
 字段约定:
 - twitter: content(必填) / author(可选) / posted_at(可选, ISO 8601) / tweet_id(可选, 推文原生 ID)
-- binance_square: content(必填) / author(可选) / posted_at(可选, ISO 8601)
+- binance_square: content(必填) / author(可选) / posted_at(可选, ISO 8601) / post_id(可选, 帖子原生 ID)
 - discord: content / channel_name / username(均必填) / posted_at(可选, ISO 8601)
 
 posted_at 不传或解析失败时置为 None,由摘要侧用 created_at 兜底。
 
-twitter 单独走 PostgreSQL 的 INSERT ... ON CONFLICT (tweet_id) DO NOTHING,
-保证抓取脚本重复跑不会因 UniqueViolation 整批回滚。binance / discord 仍走
-原本的 session.add_all(),语义不变。
+twitter / binance_square 都走 PostgreSQL 的 INSERT ... ON CONFLICT (<原生 id>) DO NOTHING,
+保证抓取脚本重复跑不会因 UniqueViolation 整批回滚。discord 仍走原本的 session.add_all(),语义不变。
 """
 
 from datetime import datetime, timezone
@@ -84,8 +83,18 @@ def _build_twitter_row(item: dict) -> dict:
     return fields
 
 
-def _build_binance_row(item: dict) -> BinanceSquarePost:
-    return BinanceSquarePost(**_common_raw_fields(item))
+def _build_binance_row(item: dict) -> dict:
+    """binance_square 走 Core insert + ON CONFLICT(post_id),与 twitter 对称。"""
+    fields = _common_raw_fields(item)
+    post_id = item.get("post_id")
+    if post_id is not None:
+        # 币安广场帖子 ID 一般是数字字符串,兼容 int 传入
+        if not isinstance(post_id, (str, int)) or (isinstance(post_id, str) and not post_id.strip()):
+            raise IngestError("post_id 必须是非空字符串或整数")
+        fields["post_id"] = str(post_id)
+    else:
+        fields["post_id"] = None
+    return fields
 
 
 def _build_discord_message(item: dict) -> DiscordMessage:
@@ -111,7 +120,7 @@ class IngestService:
     接收外部提交的原始数据并批量入库。
 
     单次请求只处理一种 source,内部用一个事务完成批量插入,失败整批回滚以避免半批写入。
-    twitter 走 ON CONFLICT (tweet_id) DO NOTHING,保证同一条推文重复提交不会失败。
+    twitter / binance_square 都走 ON CONFLICT (<原生 id>) DO NOTHING,保证同一条数据重复提交不会失败。
     """
 
     SUPPORTED_SOURCES = ("twitter", "binance_square", "discord")
@@ -134,7 +143,7 @@ class IngestService:
         if source == "discord":
             return self._ingest_orm([_build_discord_message(it) for it in items])
         # binance_square
-        return self._ingest_orm([_build_binance_row(it) for it in items])
+        return self._ingest_binance(items)
 
     def _ingest_orm(self, rows: list) -> int:
         with self._db.get_session() as session:
@@ -159,4 +168,20 @@ class IngestService:
             result = session.execute(stmt)
             session.commit()
         # rowcount 为实际写入行数(冲突跳过的不算)
+        return int(result.rowcount or 0)
+
+    def _ingest_binance(self, items: list[dict]) -> int:
+        """
+        binance_square 走 Core insert + ON CONFLICT (post_id) DO NOTHING,
+        与 _ingest_twitter 对称:没传 post_id 的行不冲突正常插入,传了的同 id 跳过。
+        """
+        rows = [_build_binance_row(it) for it in items]
+        stmt = (
+            pg_insert(BinanceSquarePost)
+            .values(rows)
+            .on_conflict_do_nothing(index_elements=["post_id"])
+        )
+        with self._db.get_session() as session:
+            result = session.execute(stmt)
+            session.commit()
         return int(result.rowcount or 0)
