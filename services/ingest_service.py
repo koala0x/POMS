@@ -9,12 +9,12 @@ from __future__ import annotations
 字段约定:
 - twitter: content(必填) / author(可选) / posted_at(可选, ISO 8601) / tweet_id(可选, 推文原生 ID)
 - binance_square: content(必填) / author(可选) / posted_at(可选, ISO 8601) / post_id(可选, 帖子原生 ID)
-- discord: content / channel_name / username(均必填) / posted_at(可选, ISO 8601)
+- discord: content / channel_name / username(均必填) / posted_at(可选, ISO 8601) / post_id(可选, 复合原生 ID, 例如 "<channel_id>-<message_id>")
 
 posted_at 不传或解析失败时置为 None,由摘要侧用 created_at 兜底。
 
-twitter / binance_square 都走 PostgreSQL 的 INSERT ... ON CONFLICT (<原生 id>) DO NOTHING,
-保证抓取脚本重复跑不会因 UniqueViolation 整批回滚。discord 仍走原本的 session.add_all(),语义不变。
+twitter / binance_square / discord 都走 PostgreSQL 的 INSERT ... ON CONFLICT (<原生 id>) DO NOTHING,
+保证抓取脚本重复跑不会因 UniqueViolation 整批回滚;没传原生 id 的行(NULL)在 PG 默认行为下互不冲突,正常插入。
 """
 
 from datetime import datetime, timezone
@@ -97,7 +97,8 @@ def _build_binance_row(item: dict) -> dict:
     return fields
 
 
-def _build_discord_message(item: dict) -> DiscordMessage:
+def _build_discord_message(item: dict) -> dict:
+    """discord 走 Core insert + ON CONFLICT(post_id),与 twitter / binance_square 对称。"""
     content = item.get("content")
     channel_name = item.get("channel_name")
     username = item.get("username")
@@ -107,12 +108,23 @@ def _build_discord_message(item: dict) -> DiscordMessage:
         raise IngestError("discord 数据 channel_name 必填且为非空字符串")
     if not isinstance(username, str) or not username.strip():
         raise IngestError("discord 数据 username 必填且为非空字符串")
-    return DiscordMessage(
-        content=content,
-        channel_name=channel_name,
-        username=username,
-        posted_at=_parse_posted_at(item.get("posted_at")),
-    )
+    row: dict = {
+        "content": content,
+        "channel_name": channel_name,
+        "username": username,
+        "posted_at": _parse_posted_at(item.get("posted_at")),
+    }
+    post_id = item.get("post_id")
+    if post_id is not None:
+        # Discord 复合 ID 形如 "<channel_id>-<message_id>",一般是字符串;兼容 int 传入
+        if not isinstance(post_id, (str, int)) or (
+            isinstance(post_id, str) and not post_id.strip()
+        ):
+            raise IngestError("post_id 必须是非空字符串或整数")
+        row["post_id"] = str(post_id)
+    else:
+        row["post_id"] = None
+    return row
 
 
 class IngestService:
@@ -120,7 +132,8 @@ class IngestService:
     接收外部提交的原始数据并批量入库。
 
     单次请求只处理一种 source,内部用一个事务完成批量插入,失败整批回滚以避免半批写入。
-    twitter / binance_square 都走 ON CONFLICT (<原生 id>) DO NOTHING,保证同一条数据重复提交不会失败。
+    twitter / binance_square / discord 都走 ON CONFLICT (<原生 id>) DO NOTHING,
+    保证同一条数据重复提交不会失败。
     """
 
     SUPPORTED_SOURCES = ("twitter", "binance_square", "discord")
@@ -141,15 +154,9 @@ class IngestService:
         if source == "twitter":
             return self._ingest_twitter(items)
         if source == "discord":
-            return self._ingest_orm([_build_discord_message(it) for it in items])
+            return self._ingest_discord(items)
         # binance_square
         return self._ingest_binance(items)
-
-    def _ingest_orm(self, rows: list) -> int:
-        with self._db.get_session() as session:
-            session.add_all(rows)
-            session.commit()
-        return len(rows)
 
     def _ingest_twitter(self, items: list[dict]) -> int:
         """
@@ -178,6 +185,24 @@ class IngestService:
         rows = [_build_binance_row(it) for it in items]
         stmt = (
             pg_insert(BinanceSquarePost)
+            .values(rows)
+            .on_conflict_do_nothing(index_elements=["post_id"])
+        )
+        with self._db.get_session() as session:
+            result = session.execute(stmt)
+            session.commit()
+        return int(result.rowcount or 0)
+
+    def _ingest_discord(self, items: list[dict]) -> int:
+        """
+        discord 走 Core insert + ON CONFLICT (post_id) DO NOTHING。
+
+        - 没传 post_id 的行:post_id 为 NULL,PG 默认 NULL ≠ NULL,不冲突,正常插入。
+        - 传了 post_id 的行:同 post_id 已存在则跳过,rowcount 反映实际新增行数。
+        """
+        rows = [_build_discord_message(it) for it in items]
+        stmt = (
+            pg_insert(DiscordMessage)
             .values(rows)
             .on_conflict_do_nothing(index_elements=["post_id"])
         )

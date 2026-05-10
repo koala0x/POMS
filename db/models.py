@@ -111,6 +111,11 @@ class DiscordMessage(Base):
     - channel_name:频道名(例如 #alpha-calls)
     - username:发言用户名
 
+    post_id 是 Discord 侧的原生消息标识(抓取脚本通常用 `<channel_id>-<message_id>` 的复合
+    形式,例如 "1234567890-9876543210"),加 UNIQUE 约束后可走 INSERT ... ON CONFLICT
+    (post_id) DO NOTHING 做入库去重,和 twitter_posts.tweet_id / binance_square_posts.post_id
+    的设计完全对称。多个 NULL 在 PostgreSQL 默认行为下不冲突,历史数据无需回填。
+
     为了让 Level1Service 现有 prompt 渲染逻辑(读 author / posted_at)无差别复用,
     暴露一个只读 author 派生属性:`#<channel_name> @<username>`。
     """
@@ -121,6 +126,8 @@ class DiscordMessage(Base):
     channel_name: Mapped[str] = mapped_column(String(255), nullable=False)
     username: Mapped[str] = mapped_column(String(255), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Discord 消息的原生复合 ID,可空以兼容老抓取路径,传入时走 UNIQUE + ON CONFLICT 去重
+    post_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -143,6 +150,7 @@ class DiscordMessage(Base):
             "created_at",
         ),
         Index("idx_discord_messages_channel_created_at", "channel_name", "created_at"),
+        UniqueConstraint("post_id", name="uq_discord_messages_post_id"),
     )
 
     @property

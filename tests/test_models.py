@@ -77,6 +77,20 @@ def test_binance_post_id_unique() -> None:
     assert table.c.post_id.nullable is True  # 兼容老路径,可空
 
 
+def test_discord_post_id_unique() -> None:
+    """discord_messages.post_id 必须有 UNIQUE 约束,抓取侧依赖 ON CONFLICT 做去重。"""
+    from db.models import DiscordMessage
+
+    table = DiscordMessage.__table__
+    unique_cols = {
+        tuple(c.name for c in uc.columns)
+        for uc in table.constraints
+        if uc.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("post_id",) in unique_cols
+    assert table.c.post_id.nullable is True  # 兼容老路径,可空
+
+
 def test_raw_post_constraints() -> None:
     """关键 nullable / 默认值约束正确。"""
     columns = {c.name: c for c in inspect(TwitterPost).columns}
