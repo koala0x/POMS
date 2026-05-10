@@ -30,7 +30,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    """所有 ORM 模型的统一基类,通过它的 metadata.create_all() 兜底建表。"""
+    """所有 ORM 模型的统一基类;本服务只做查询/写入,不依赖 metadata.create_all()。"""
 
 
 class _RawPostMixin:

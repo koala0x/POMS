@@ -6,6 +6,9 @@ from __future__ import annotations
 所有运行时配置直接写在这里,**不依赖外部 .env 文件**。
 - 改配置:直接修改本文件 Settings 类里的字段默认值
 - 新增配置:在 Settings 里加字段并填默认值,使用方 get_settings() 读取
+
+本服务只做"读原始表 → 调 LLM → 写摘要表"的 AI 数据清洗,
+HTTP 接入 / Twitter 抓取等配置已随对应代码移出。
 """
 
 from dataclasses import dataclass, field
@@ -63,33 +66,6 @@ class Settings:
     # ------------------------------ 日志 -----------------------------------
     log_path: str = "./logs/service.log"
     log_retention_days: int = 30
-
-    # ------------------------------ HTTP 接入 -------------------------------
-    # api_main.py 启动的数据接入服务监听地址。0.0.0.0 表示对外暴露,
-    # 内网/本机部署可改成 127.0.0.1 仅限本地访问。
-    api_host: str = "0.0.0.0"
-    api_port: int = 18089
-
-    # ------------------------------ Twitter List 抓取 -----------------------
-    # api_main.py 启动后,后台线程会按 twitter_list_fetch_interval_seconds 周期
-    # 调 twitterapi.io 拉某个 List 的推文,经 IngestService 直接写入 twitter_posts。
-    # 启动时立即跑首轮,之后每 interval 一次。
-    #
-    # twitterapi_io_key:在 https://twitterapi.io/dashboard 拿到的 API Key。
-    #   占位是 "YOUR_API_KEY",**部署前请替换为真实 key**;占位值时 fetcher 自动跳过。
-    # twitter_list_id:目标 List 的数字 ID,例如 https://x.com/i/lists/<id> 的 <id>。
-    # twitter_list_max_pages:单轮最多翻多少页(每页 ~20 条),控制单次成本上限。
-    # twitter_list_fetch_interval_seconds:轮询间隔,默认 1800(30 分钟)。
-    # twitter_list_retry_times:**单轮内**遇到可重试错误(超时 / 5xx / 429 / DB 抖动)
-    #   时的最大尝试次数,含首次,默认 3。4xx(401/403/404 等不可恢复错误)不消耗重试。
-    # twitter_list_retry_delay_seconds:重试之间的固定间隔,默认 180(3 分钟),
-    #   用 stop_event.wait 实现,shutdown 时能立即唤醒不会拖慢退出。
-    twitterapi_io_key: str = "new1_3c489f5d8d7d497f8fd6f1a64ef20134"
-    twitter_list_id: str = "1898760983553974442"
-    twitter_list_max_pages: int = 20
-    twitter_list_fetch_interval_seconds: int = 1800
-    twitter_list_retry_times: int = 3
-    twitter_list_retry_delay_seconds: int = 180
 
     # ------------------------------ 时区 -----------------------------------
     # 时间戳写库时统一带 tz;period_start/period_end 等字段也用它构造。

@@ -6,7 +6,7 @@ Repository 集成测试,基于真实 PostgreSQL。
 策略:
 - 通过 .env 读取 DB 配置;若环境不可用则 pytest.skip 而不报错
 - 每个用例使用独立 Session,在 finally 中清理本测试插入的行(按 id 范围)
-- 不污染表结构,直接复用 create_all() 已建好的业务表
+- 不污染表结构,直接复用上游维护好的业务表(本服务不负责建表)
 """
 
 from datetime import datetime, timedelta, timezone
@@ -26,16 +26,20 @@ from db.repositories.twitter_repo import TwitterRepo
 
 @pytest.fixture(scope="module")
 def db() -> Database:
-    """初始化 Database 并兜底建表。如 PG 不可达则跳过整个模块。"""
+    """
+    初始化 Database。如 PG 不可达或业务表不存在则跳过整个模块。
+
+    本服务只读写,不建表;集成测试假定上游已创建好业务表。
+    """
     try:
         instance = Database(get_settings())
-        instance.create_all()
-        # 显式触发一次连接,确保 PG 可用。
+        # 显式触发一次连接 + 业务表探测,确保 PG 可用且表已存在。
         with instance.get_session() as session:
             session.execute(select(1))
+            session.execute(select(TwitterPost).limit(1))
         return instance
     except Exception as e:
-        pytest.skip(f"PostgreSQL 不可用,跳过集成测试:{e}")
+        pytest.skip(f"PostgreSQL 或业务表不可用,跳过集成测试:{e}")
 
 
 def _now_utc() -> datetime:

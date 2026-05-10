@@ -3,10 +3,13 @@ from __future__ import annotations
 """
 程序入口。
 
+本服务只负责"从已有原始表里读数据 → 经 Ollama 做两级摘要 → 写回摘要表"。
+建表/抓取/HTTP 接入等职责都已拆到其他服务里,本服务对数据库只做读写,**不再负责建表**。
+
 启动流程:
-- 读取配置(.env)
+- 读取配置(config/settings.py)
 - 初始化日志(控制台 + 文件按天滚动)
-- 初始化 DB(SQLAlchemy Engine + Session)并建表
+- 初始化 DB(SQLAlchemy Engine + Session)
 - 初始化 LLM 客户端 / 各仓储 / 各 service
 - 启动定时任务并常驻运行
 """
@@ -62,11 +65,9 @@ def main() -> None:
     Path(settings.log_path).parent.mkdir(parents=True, exist_ok=True)
     _init_logging(settings.log_path, settings.log_retention_days)
 
-    # 初始化 DB,并通过 ORM metadata 兜底建表(幂等)。
-    # 所有表/索引定义都在 db/models.py 中,变更只需修改模型,无需手写 DDL。
+    # 初始化 DB。本服务只读写,不建表:表结构由上游 API/迁移服务保证。
     db = Database(settings)
-    db.create_all()
-    logger.info("数据库初始化完成(create_all 已执行)")
+    logger.info("数据库连接已初始化(不再执行建表)")
 
     # 一次摘要(level1)与二次摘要(level2)使用各自的 Ollama 客户端,
     # 这样可以给低频高质量的 level2 配置更大模型/更长 timeout。
@@ -103,7 +104,7 @@ def main() -> None:
     base_dir = Path(__file__).resolve().parent
     prompts_dir = base_dir / "prompts"
 
-    # 业务层:分别为两个 source 构建 service(互不合并)
+    # 业务层:分别为三个 source 构建 service(互不合并)
     level1_services = [
         Level1Service(
             db=db,
@@ -185,7 +186,7 @@ def main() -> None:
     )
 
     try:
-        # Level1 worker 在后台线程跑,主线程只需要常驻
+        # worker 在后台线程跑,主线程只需要常驻
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

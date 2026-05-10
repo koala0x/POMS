@@ -9,6 +9,8 @@ from __future__ import annotations
 - sessionmaker 工厂生成 Session;通过 get_session() contextmanager 借出
 - 不在 contextmanager 里自动 commit,由 Service 层显式控制事务边界
   (保持原有"失败时不更新标记"的语义)
+
+注意:本服务只做读写,不负责建表。表结构由上游 API/迁移服务保证。
 """
 
 from contextlib import contextmanager
@@ -20,7 +22,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from config.settings import Settings
-from db.models import Base
 
 
 class Database:
@@ -29,7 +30,6 @@ class Database:
 
     用法:
         db = Database(settings)
-        db.create_all()                  # 建表(幂等)
         with db.get_session() as session:
             ...                          # 使用 ORM 操作
             session.commit()             # 显式提交
@@ -74,18 +74,10 @@ class Database:
 
     @property
     def engine(self) -> Engine:
-        """暴露底层 Engine,主要供 create_all/测试 fixture 使用。"""
+        """暴露底层 Engine,主要供测试 fixture 使用。"""
         self._ensure()
         assert self._engine is not None
         return self._engine
-
-    def create_all(self) -> None:
-        """
-        幂等建表:基于 ORM 模型 metadata 创建所有表与索引。
-
-        启动时调用,确保新部署或新环境无需手动跑迁移脚本。
-        """
-        Base.metadata.create_all(self.engine)
 
     def reconnect(self) -> None:
         """
