@@ -85,16 +85,8 @@ class Settings:
     # level2 单次请求超时(秒)。语义同 ollama_timeout_level1。
     ollama_timeout_level2: int = 600
 
-    # ------ 重试策略(level1 / level2 共用) ------
-
-    # 单次 LLM 调用的最大尝试次数(含首次)。
-    # ReadTimeout 不走重试(Ollama 后端仍可能在生成,重试只会让请求堆积);
-    # 其它异常(JSON 解析失败 / 连接错 / 5xx)会按此次数重试。
-    # 本地 Ollama 基本没网络抖动,失败多半是模型 / 输入问题,
-    # 默认 1 = 只跑一次不重试,避免 CPU 雪上加霜。
-    ollama_retry_times: int = 1
-    # 每次重试之间的固定间隔(秒)。retry_times=1 时此配置无作用。
-    ollama_retry_delay_seconds: int = 0
+    # 注:本地 Ollama 单线程推理,失败重试只会堵死模型且让请求堆积,
+    # 所以客户端不做任何重试——失败直接抛错,等下一轮 worker 轮询自然重跑。
 
     # ==========================================================================
     # 3. 业务参数

@@ -19,8 +19,6 @@ def test_chat_interactive_with_local_ollama() -> None:
         base_url="http://localhost:11434",
         model="qwen3:30b",
         timeout_seconds=300,
-        retry_times=1,
-        retry_delay_seconds=0,
     )
     reply = client.chat("#独家报道 | 维杰不愿接受DMK、AIADMK或任何其他与BJP结盟的政党的支持。他希望与左翼力量组建一个世俗政府。我欢迎联合政府：VCK主席托尔·蒂鲁马瓦拉万接受@nimumurali采访时表示。#维杰 #TVK #泰米尔纳德邦")
     print(f"Model: {reply}")

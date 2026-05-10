@@ -115,8 +115,6 @@ twitter_posts / binance_square_posts / discord_messages
 | `ollama_timeout_level1` | `600` | level1 单次超时(秒) |
 | `ollama_model_level2` | `qwen3:8b` | level2 模型(可换大模型) |
 | `ollama_timeout_level2` | `600` | level2 单次超时(秒) |
-| `ollama_retry_times` | `1` | 失败重试次数(本地服务默认不重试) |
-| `ollama_retry_delay_seconds` | `0` | 重试间隔 |
 | `poll_interval_seconds` | `30` | worker 空闲轮询间隔 |
 | `batch_size` | `20` | 一次摘要批大小 |
 | `level2_threshold` | `5` | 二次摘要触发阈值 |

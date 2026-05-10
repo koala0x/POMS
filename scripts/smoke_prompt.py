@@ -110,8 +110,6 @@ def main() -> None:
         base_url=settings.ollama_base_url,
         model=model_override,
         timeout_seconds=600,
-        retry_times=1,
-        retry_delay_seconds=0,
         enable_thinking=False,  # 关闭 qwen3 推理链,直接给答案
     )
 

@@ -75,15 +75,11 @@ def main() -> None:
         base_url=settings.ollama_base_url,
         model=settings.ollama_model_level1,
         timeout_seconds=settings.ollama_timeout_level1,
-        retry_times=settings.ollama_retry_times,
-        retry_delay_seconds=settings.ollama_retry_delay_seconds,
     )
     ollama_l2 = OllamaClient(
         base_url=settings.ollama_base_url,
         model=settings.ollama_model_level2,
         timeout_seconds=settings.ollama_timeout_level2,
-        retry_times=settings.ollama_retry_times,
-        retry_delay_seconds=settings.ollama_retry_delay_seconds,
     )
     logger.info(
         "Ollama 客户端就绪:level1={} (timeout {}s) / level2={} (timeout {}s)",
