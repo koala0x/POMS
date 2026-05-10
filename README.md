@@ -1,4 +1,4 @@
-# Social Summary Service
+# PomsAI
 
 一个常驻后台运行的 Python 服务,把外部抓取到的原始社交数据(Twitter / 币安广场 / Discord)
 按数据源独立做"两级摘要",最终把高密度的简报落库,供下游系统消费。
