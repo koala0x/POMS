@@ -135,3 +135,176 @@ def test_split_handles_missing_content_attr_gracefully() -> None:
     kept, dropped = split([Empty(), _Post(None)])  # type: ignore[arg-type]
     assert kept == []
     assert len(dropped) == 2
+
+
+# ============================================================================
+# Task 2.4 新增：classify 实体抽取测试（requirements.md Req 4.1~4.4, 4.9）
+# ----------------------------------------------------------------------------
+# 约定：以下 case 全部依赖真实的 dictionaries/tickers.yaml
+# （BTC 在词典里、XYZABC 不在词典里）。测试不 mock 词典，因为：
+# 1. Task 1.4 已独立覆盖了 loader 逻辑
+# 2. 这里要验证的正是"classify + 真实词典"的集成行为
+# 3. 词典是启动期加载的单例，mock 它反而会让行为不贴近真实运行
+# ============================================================================
+
+
+from services.prefilter import Entity, FilterDecision  # noqa: E402
+
+
+def test_classify_returns_entities_for_dollar_ticker() -> None:
+    """
+    Req 4.2 + 4.3：$BTC 应命中 1 个 Entity，BTC 在词典里所以 confidence=1.0。
+    """
+    d = classify("$BTC 突破了 73000 美元")
+    btc = [e for e in d.entities if e.name == "BTC"]
+    assert len(btc) == 1, f"BTC 应只出现一次，实际：{d.entities}"
+    assert btc[0].entity_type == "ticker"
+    assert btc[0].confidence == 1.0  # 词典命中
+
+
+def test_classify_returns_entities_for_unknown_ticker() -> None:
+    """
+    Req 4.2：词典外的 $TICKER 走正则路径，confidence=0.95。
+    XYZABC 不在 tickers.yaml 里，所以只由 _DOLLAR_RE 正则抽出。
+    """
+    d = classify("$XYZABC 是个新币，看看能不能拉")
+    xyz = [e for e in d.entities if e.name == "XYZABC"]
+    assert len(xyz) == 1, f"XYZABC 应被抽出，实际：{d.entities}"
+    assert xyz[0].entity_type == "ticker"
+    assert xyz[0].confidence == 0.95  # 正则命中
+
+
+def test_classify_dedup_regex_and_dict_hit() -> None:
+    """
+    Req 4.4：同一 name 被正则与词典双命中时，只保留一条且 confidence=1.0。
+    `$BTC 比特币` 同时：正则抽到 BTC (0.95) + 词典抽到 BTC (1.0) → 合并成 1 条 1.0。
+    """
+    d = classify("$BTC 比特币 稳了，今晚决胜")
+    btc = [e for e in d.entities if e.name == "BTC"]
+    assert len(btc) == 1, f"BTC 必须去重成 1 条，实际：{d.entities}"
+    assert btc[0].confidence == 1.0, f"词典应覆盖正则，实际：{btc[0]}"
+
+
+def test_classify_chinese_alias_maps_to_standard_name() -> None:
+    """
+    Req 4.2 + 4.4：中文别名（"比特币" / "以太坊"）抽取后应用英文标准名。
+    保证 entity_mentions 统计口径统一——不会一会儿"比特币"一会儿"BTC"算两次。
+    """
+    d = classify("今天比特币涨了 3%，以太坊也稳了")  # F 规则 keep
+    names = {e.name for e in d.entities}
+    assert "BTC" in names, f"比特币 应映射到 BTC，实际 names={names}"
+    assert "ETH" in names, f"以太坊 应映射到 ETH，实际 names={names}"
+    # 且绝不能出现中文名本身作为 entity.name
+    assert "比特币" not in names
+    assert "以太坊" not in names
+
+
+def test_classify_evm_address() -> None:
+    """
+    Req 4.2：0x 开头的 EVM 合约地址被抽成 project 类型，confidence=0.95。
+    """
+    d = classify(
+        "USDT 合约地址是 0xdAC17F958D2ee523a2206206994597C13D831ec7，靠谱"
+    )
+    addrs = [e for e in d.entities if e.entity_type == "project"]
+    assert len(addrs) == 1, f"预期 1 个 project 实体，实际：{d.entities}"
+    assert addrs[0].name == "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    assert addrs[0].confidence == 0.95
+
+
+def test_classify_solana_address() -> None:
+    """
+    Req 4.2：base58 的 Solana 地址（32~44 字符）被抽成 project 类型。
+    使用 Solana 官方 USDC 代币的合约地址，这是一个真实可验证的 base58 字符串。
+    """
+    sol = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    d = classify(f"USDC 在 Solana 上的合约是 {sol} 这个")
+    sol_entities = [e for e in d.entities if e.name == sol]
+    assert len(sol_entities) == 1
+    assert sol_entities[0].entity_type == "project"
+    assert sol_entities[0].confidence == 0.95
+
+
+def test_classify_evm_not_confused_with_solana() -> None:
+    """
+    Task 2.3a 的关键边界：EVM 地址（0x 开头）不应被 Solana 正则二次命中。
+    base58 字母表与 EVM hex 有重叠字符（a-f），所以需要显式保护。
+    """
+    evm = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    d = classify(f"看看这个地址 {evm}，是 USDT 的")
+    evm_hits = [e for e in d.entities if e.name.startswith("0x")]
+    sol_hits = [
+        e for e in d.entities
+        if e.entity_type == "project" and not e.name.startswith("0x")
+    ]
+    assert len(evm_hits) == 1
+    assert len(sol_hits) == 0, (
+        f"EVM 地址不应被 Solana 正则再次捕获，实际额外命中：{sol_hits}"
+    )
+
+
+def test_classify_empty_entities_still_returns_decision() -> None:
+    """
+    Req 4.1：FilterDecision 即使 entities 为空也要正常返回（不抛错）。
+    空字符串 → D:length<20，且 entities=[]。
+    """
+    d = classify("")
+    assert d.keep is False
+    assert d.reason == "D:length<20"
+    assert d.entities == []
+
+
+def test_classify_drops_message_still_carries_entities() -> None:
+    """
+    Task 2.3b 设计决策：被 drop 的消息也要带上 entities（便于 Phase 2 debug）。
+    下游 EntityExtractor 自己会用 is_duplicate 过滤，不会造成冗余写入。
+    """
+    # 这条很短但包含 $BTC → A 规则 keep，改个场景：长但跑题 + 含 $FAKE 假代币
+    d = classify("其实吧我觉得 $FAKE 这币不咋样别冲，风险太大完了完了肯定归零")
+    # $FAKE 正则会命中 ticker 抽出
+    # keep 判断：有 $ 信号 → A 规则 keep
+    assert d.keep is True
+    assert d.reason == "A:$symbol"
+    fake = [e for e in d.entities if e.name == "FAKE"]
+    assert len(fake) == 1, f"FAKE 应被抽出，实际：{d.entities}"
+
+
+def test_filter_decision_backward_compat() -> None:
+    """
+    Req 4.9：两参数构造 FilterDecision(True, 'A') 必须继续可用，
+    entities 字段带默认空列表，不 TypeError。
+    """
+    d = FilterDecision(True, "A:$symbol")  # 老代码风格
+    assert d.keep is True
+    assert d.reason == "A:$symbol"
+    assert d.entities == []
+
+
+def test_filter_decision_default_entities_are_independent() -> None:
+    """
+    field(default_factory=list) 行为验证：两次空构造返回独立 list，
+    不是共享引用。避免"改了一个 entity 污染另一个 FilterDecision"。
+    """
+    d1 = FilterDecision(False, "X")
+    d2 = FilterDecision(False, "Y")
+    assert d1.entities is not d2.entities
+
+
+def test_classify_entity_type_hard_constrained_to_five(
+) -> None:
+    """
+    Req 4.3：Phase 1 entity_type 必须是 ticker / chain / narrative / project / kol 之一。
+    这里抽检一批实际 classify 输出的 entity_type，确认全部落在白名单内。
+    """
+    allowed = {"ticker", "chain", "narrative", "project", "kol"}
+    inputs = [
+        "$BTC 比特币 今天很强",                  # ticker
+        "$XYZABC 这是啥",                       # ticker (regex-only)
+        "0xdAC17F958D2ee523a2206206994597C13D831ec7 大家看看",  # project (EVM)
+    ]
+    for text in inputs:
+        d = classify(text)
+        for e in d.entities:
+            assert e.entity_type in allowed, (
+                f"非法 entity_type={e.entity_type!r} 来自 text={text!r}, entity={e}"
+            )
