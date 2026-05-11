@@ -138,6 +138,64 @@ class Settings:
     # frozen dataclass 里可变默认必须用 default_factory。
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
 
+    # ==========================================================================
+    # 6. Phase 1 新流水线（crypto-narrative-radar）
+    # --------------------------------------------------------------------------
+    # 零 LLM 的实体热度排行榜新链路配置。与老 level1/level2 参数互不影响，
+    # 改动这一组只影响 Normalizer / EntityExtractor / SlidingCounter / HotnessService。
+    # 对应 requirements.md Req 2 / 6 / 7 的参数化。
+    # ==========================================================================
+
+    # --- L0 Normalizer ---
+
+    # 每轮三源各扫描多少条未归一化记录（Req 1.6）
+    # 生产默认 500；batch=500 × 3 源 = 单轮最多 1500 条，内存/耗时可控
+    normalizer_batch_size: int = 500
+
+    # --- L0 SimHash 去重 ---
+
+    # SimHash 判重阈值：汉明距离 ≤ threshold 视为重复（Req 2.2）
+    # 默认 3 是经验值；调大→更激进去重，调小→更保守
+    dedup_hamming_threshold: int = 3
+
+    # 判重历史窗口（Req 2.6）。Deduplicator 的内存桶只保留最近 N 小时，
+    # 老于此值的桶被自动清理，防止无限增长
+    dedup_window_hours: int = 24
+
+    # --- L1 Entity Extractor ---
+
+    # 每轮从 normalized_messages 取多少条未处理消息
+    entity_extractor_batch_size: int = 500
+
+    # --- L2 Hotness ---
+
+    # 排行榜 Top-K（Req 7.5）
+    hotness_top_k: int = 20
+
+    # growth_rate 分母平滑值（Req 7.2）：growth = short / max(baseline_per_h, smoothing)
+    # 避免基线=0 时除零；同时让"新实体但只被提 1 次"不会被夸大成 growth=∞
+    hotness_smoothing: float = 2.0
+
+    # 短窗时长（小时）。Phase 1 固定 1h，产出 window_type='1h' 的快照
+    hotness_short_hours: int = 1
+
+    # 基线窗长度（天）。Phase 1 用 7 天；调短→对突变更敏感、对长期趋势不敏感
+    hotness_baseline_days: int = 7
+
+    # 基线样本充足性门槛（Req 7.7）：近 baseline_days 的 entity_mentions 总数
+    # 低于此值直接跳过本轮，避免冷启动期 growth_rate 全是噪音
+    hotness_min_baseline_count: int = 100
+
+    # --- L2 Sliding Counter 启动回填（Req 6.7） ---
+
+    # 硬上限：超过这个秒数强制中止回填，避免启动期被过量历史数据卡住（情况 C）
+    sliding_counter_backfill_max_seconds: int = 600
+
+    # WARN 阈值：低于此值算"快速成功"（情况 A INFO 日志）
+    # 在 [warn, max] 区间算"慢速成功"（情况 B WARN 日志）
+    # 单测可注入小值（如 0.1）来验证情况 A/B 分支
+    sliding_counter_backfill_warn_seconds: int = 120
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

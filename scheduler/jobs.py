@@ -29,9 +29,14 @@ from loguru import logger
 
 class Jobs:
     """
-    单线程 worker:level1 / level2 全部串行触发。
+    单线程 worker:level1 / level2 / new_services 全部串行触发。
 
     通过 start() 启动 worker 线程,shutdown() 干净退出。
+
+    Phase 1 扩展（crypto-narrative-radar）：
+    - 新增 `new_services` 参数（带默认值保证向后兼容）
+    - `_worker_loop` 按固定顺序 level1 → level2 → new 轮转
+    - 每组内部的异常被隔离：单 service 抛错只打 ERROR 日志，不影响同组/跨组其他 service
     """
 
     def __init__(
@@ -39,9 +44,11 @@ class Jobs:
         level1_services: Sequence[object],
         level2_services: Sequence[object],
         poll_interval_seconds: int,
+        new_services: Sequence[object] = (),
     ) -> None:
         self._level1_services = level1_services
         self._level2_services = level2_services
+        self._new_services = new_services
         self._poll_interval_seconds = poll_interval_seconds
         # 用 Event 让 worker 线程能被唤醒/停止
         self._stop_event = threading.Event()
@@ -56,59 +63,72 @@ class Jobs:
         )
         self._worker_thread.start()
 
-    def shutdown(self, wait: bool = False) -> None:
-        """通知 worker 退出。"""
+    def shutdown(self, wait: bool = False, join_timeout: float = 10.0) -> None:
+        """
+        通知 worker 退出。
+
+        参数：
+        - wait：当前版本未使用；保留签名以兼容历史调用方
+        - join_timeout：join 等待上限，默认 10s（生产 Req 8.8 的阈值）
+                       单测可传更小值（如 2.0）验证快速停机能力
+        """
         self._stop_event.set()
         if self._worker_thread is not None and self._worker_thread.is_alive():
-            # 等线程跑完当前一轮(最多卡在 LLM 调用上)。
             # daemon=True 即便没 join 上,主进程退出时也会一起结束。
-            self._worker_thread.join(timeout=10)
+            self._worker_thread.join(timeout=join_timeout)
             self._worker_thread = None
 
     def _worker_loop(self) -> None:
         """
-        串行 worker 主循环。
+        串行 worker 主循环（Phase 1 扩展为三组：level1 → level2 → new_services）。
 
         每轮:
-        - 依次跑所有 level1_service(每个 svc.run_once() 同步阻塞)
-        - 依次跑所有 level2_service(同上)
-        - 任意一个 svc 真处理过 → 不 sleep,直接进下一轮(可能还有积压)
+        - 按固定顺序迭代 level1 / level2 / new_services 三组
+        - 每个 svc.run_once() 同步阻塞；返回 True 表示真处理了数据
+        - 单 service 抛异常 → 捕获 + log.error + 继续下一个 service
+          （保证某个 service 坏掉不会拖死整个 worker）
+        - `_stop_event.is_set()` 检查嵌入到 service 级别，shutdown 在最多
+          一个 service 周期后生效（单测里的 wait 语义由此而来）
+        - 任意一个 svc 真处理过 → 不 sleep,直接进下一轮
         - 全员都"数据不足"(或失败)→ sleep poll_interval_seconds 再 check
         """
         logger.info(
-            "summary worker 启动:level1 services={},level2 services={},空闲 sleep {}s",
+            "summary worker 启动:level1={},level2={},new={},空闲 sleep {}s",
             len(self._level1_services),
             len(self._level2_services),
+            len(self._new_services),
             self._poll_interval_seconds,
+        )
+        # 固定顺序：老链路先跑（LLM 慢活优先消化），新链路跟在后面
+        groups = (
+            ("level1", self._level1_services),
+            ("level2", self._level2_services),
+            ("new", self._new_services),
         )
         while not self._stop_event.is_set():
             processed_any = False
 
-            # 一次提纯
-            for svc in self._level1_services:
-                if self._stop_event.is_set():
-                    break
-                try:
-                    if svc.run_once():
-                        processed_any = True
-                except Exception as e:
-                    logger.error("一次摘要任务异常:{}", e)
-
-            # 二次提纯(在一次提纯之后,这样新写入的 level1 立刻参与触发判断)
-            for svc in self._level2_services:
-                if self._stop_event.is_set():
-                    break
-                try:
-                    if svc.run_once():
-                        processed_any = True
-                except Exception as e:
-                    logger.error("二次摘要任务异常:{}", e)
+            for group_name, group in groups:
+                for svc in group:
+                    if self._stop_event.is_set():
+                        break
+                    try:
+                        if svc.run_once():
+                            processed_any = True
+                    except Exception as e:
+                        # 异常隔离：单 service 抛错不影响其他 service 与本轮其他组
+                        logger.error(
+                            "{} 服务 {} 异常（已隔离）：{}",
+                            group_name,
+                            type(svc).__name__,
+                            e,
+                        )
 
             if processed_any:
                 # 还可能有积压(level1 刚写入新数据,或者 level2 还能再凑一批)
                 continue
             logger.info(
-                "本轮 level1/level2 均无数据可处理,sleep {}s 后重试",
+                "本轮三组均无数据可处理,sleep {}s 后重试",
                 self._poll_interval_seconds,
             )
             self._stop_event.wait(self._poll_interval_seconds)
