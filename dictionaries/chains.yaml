@@ -1,0 +1,18 @@
+# dictionaries/chains.yaml
+#
+# 区块链/网络词典。
+# Phase 1 先留空骨架，等 Gate 1 观测到高频链名再逐步补充
+# （比如 "Base L2" / "Solana 生态" / "Monad 测试网" 这类整句式提及）。
+#
+# Schema：
+#   <CHAIN_NAME>:
+#     type:    chain           # 固定为 chain，可省略
+#     aliases: [Base L2, ...]  # 可选
+#
+# 注意：代币名（如 ETH / SOL / BNB）已在 tickers.yaml 里，
+# 本文件只放"显式把它当作一条链/网络引用"的情况，例如：
+#   Base: 从代币 BASE 的角度是 L2，从链角度是 Coinbase 的 L2 网络
+#   但 Phase 1 只用 tickers.yaml 里的 BASE（type=layer2），这里暂不重复
+#
+# 允许内容为空（服务启动时产生 WARN 日志，不阻止启动）。
+{}

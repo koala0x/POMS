@@ -1,0 +1,21 @@
+# dictionaries/narratives.yaml
+#
+# 叙事词典。这是 Phase 1 之后（Phase 2/3）真正拉开差距的地方——
+# 能否早期捕获到"AI Agent"、"RWA"、"Restaking"这类新叙事，决定排行榜的 alpha 强度。
+#
+# Phase 1 先留空。Gate 1 观测期间若发现高频叙事词没有被 $TICKER 或币名词典兜住，
+# 手动在这里补条目：
+#
+#   AI_Agent:
+#     type: narrative
+#     keywords: [AI agent, autonomous agent, agent protocol, ai16z]
+#   RWA:
+#     type: narrative
+#     keywords: [real world asset, tokenized, RWA]
+#
+# 字段说明：
+#   - `keywords` 与 `aliases` 同义，加载器（dictionaries/loader.py）两者都认
+#   - narrative 类型的实体 substring match 是 case-insensitive
+#
+# 允许内容为空（服务启动时产生 WARN 日志，不阻止启动）。
+{}

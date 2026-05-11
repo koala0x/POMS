@@ -1,0 +1,25 @@
+# dictionaries/kols.yaml
+#
+# KOL 词典。用于 Entity_Extractor 给 entity_mentions 加 is_kol_mention=TRUE 标记。
+#
+# Phase 1 这个字段只是"打标"，不参与 final_score 计算（方案 4 的建议：先打标，
+# Phase 2 再观察影响力分布后决定权重）。
+#
+# Schema：
+#   <KOL_KEY>:
+#     weight:   3.0          # 影响力权重，Phase 1 只打标不使用，留着给 Phase 2
+#     category: btc_kol      # 分类标签，便于后续按人群聚合，Phase 1 可不填
+#     aliases:  [...]        # 别名列表（推特 handle、中文名、昵称等都放这里）
+#
+# 匹配规则（Entity_Extractor 实现）：
+#   author 字段（小写后）包含任一 alias（小写） → is_kol_mention=True
+#
+# Phase 1 留空。进入 Gate 1 观测期后，把你定期追的几个头部 KOL 加进来，
+# 例如：
+#   cz_binance:
+#     weight: 3.0
+#     category: ceo
+#     aliases: ["@cz_binance", cz]
+#
+# 允许内容为空（服务启动时产生 WARN 日志，不阻止启动）。
+{}

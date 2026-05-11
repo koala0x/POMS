@@ -1,0 +1,177 @@
+# dictionaries/tickers.yaml
+#
+# 目的：
+#   把原 `services/prefilter.py` 里硬编码的 COIN_KEYWORDS_EN（60+）和
+#   COIN_KEYWORDS_ZH（7）全部外置为 YAML，让 prefilter 与 Entity_Extractor
+#   共享同一份数据，后续扩充不用改代码。
+#
+# Schema（参考 dictionaries/loader.py）：
+#   <TICKER_NAME>:
+#     type:    layer1 / defi / meme / layer2 / stablecoin / privacy / brc20 / legacy / us_stock
+#                (加载后存为 DictionaryEntry.category，Phase 1 只存不用，
+#                 entity_type 固定由所在文件决定，恒为 "ticker")
+#     aliases: [别名1, 别名2, ...]   # 可选；中英文混合都行
+#
+# 匹配规则（由 prefilter.py + Entity_Extractor 协同实现）：
+#   - 英文名（如 BTC）：non-alnum 边界匹配，case-insensitive
+#   - 中文别名（如 比特币）：substring match
+#   - 英文别名（如 bitcoin）：进入 alias_index 后也走 substring match
+#
+# Phase 1 约束：
+#   - 本文件严格只含 prefilter.py 里已有的词条，不扩充（Gate 1 观测后再加）
+#   - 冷启动期若要加词，直接编辑这里并重启服务即可
+
+# =========================================================================
+# 主流币（现 prefilter.py 的"主流币"分组）
+# =========================================================================
+
+BTC:
+  type: layer1
+  aliases: [比特币]
+ETH:
+  type: layer1
+  aliases: [以太坊, 以太]
+BNB:
+  type: layer1
+  aliases: [币安]
+SOL:
+  type: layer1
+XRP:
+  type: layer1
+ADA:
+  type: layer1
+AVAX:
+  type: layer1
+DOT:
+  type: layer1
+TRX:
+  type: layer1
+  aliases: [波场]
+LINK:
+  type: layer1
+TON:
+  type: layer1
+ATOM:
+  type: layer1
+NEAR:
+  type: layer1
+INJ:
+  type: layer1
+SUI:
+  type: layer1
+APT:
+  type: layer1
+MATIC:
+  type: layer1
+
+# =========================================================================
+# Meme 币
+# =========================================================================
+
+DOGE:
+  type: meme
+  aliases: [狗狗币]
+PEPE:
+  type: meme
+SHIB:
+  type: meme
+WIF:
+  type: meme
+BONK:
+  type: meme
+DOGS:
+  type: meme
+FLOKI:
+  type: meme
+
+# =========================================================================
+# DeFi
+# =========================================================================
+
+AAVE:
+  type: defi
+UNI:
+  type: defi
+COMP:
+  type: defi
+LIDO:
+  type: defi
+PENDLE:
+  type: defi
+EIGEN:
+  type: defi
+EIGENLAYER:
+  type: defi
+CRV:
+  type: defi
+MKR:
+  type: defi
+
+# =========================================================================
+# L2 / 跨链
+# =========================================================================
+
+ARB:
+  type: layer2
+OP:
+  type: layer2
+BASE:
+  type: layer2
+STARK:
+  type: layer2
+ZKSYNC:
+  type: layer2
+
+# =========================================================================
+# 隐私 / BRC20 / 老币
+# =========================================================================
+
+ZEC:
+  type: privacy
+ORDI:
+  type: brc20
+SATS:
+  type: brc20
+FIL:
+  type: legacy
+LTC:
+  type: legacy
+BCH:
+  type: legacy
+
+# =========================================================================
+# 美股 ticker（财经资讯高频）
+# =========================================================================
+
+AAPL:
+  type: us_stock
+TSLA:
+  type: us_stock
+MSFT:
+  type: us_stock
+NVDA:
+  type: us_stock
+AMD:
+  type: us_stock
+META:
+  type: us_stock
+GOOG:
+  type: us_stock
+AMZN:
+  type: us_stock
+MSTR:
+  type: us_stock
+  aliases: [微策略]
+COIN:
+  type: us_stock
+
+# =========================================================================
+# 稳定币
+# =========================================================================
+
+USDT:
+  type: stablecoin
+USDC:
+  type: stablecoin
+DAI:
+  type: stablecoin

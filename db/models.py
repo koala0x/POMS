@@ -18,6 +18,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     Index,
     Integer,
     String,
@@ -231,6 +232,195 @@ class SummaryLevel2(Base):
     )
 
 
+# ============================================================================
+# Phase 1 新增：加密叙事雷达（crypto-narrative-radar）
+# ----------------------------------------------------------------------------
+# 以下三张表对应 spec 的 L0/L1/L2 层产出：
+#   - NormalizedMessage：L0 归一化 + SimHash 去重后的统一消息结构
+#   - EntityMention：L1 实体抽取的提及记录（每个 NormalizedMessage 可能挂 0~N 条）
+#   - HotnessSnapshot：L2 每 15 分钟刷新一次的 Top-K 增长率排行榜
+#
+# 设计约束（见 requirements.md Req 5.9、Req 5.10）：
+#   - **不对现有 5 张表建立任何外键**（老链路保持独立）
+#   - `EntityMention.msg_id -> NormalizedMessage.id` 只做逻辑引用，应用层保证一致性
+#   - ORM 风格严格对齐 _RawPostMixin：DateTime(timezone=True)、server_default=func.now()、
+#     索引命名 idx_<table>_<cols>、唯一约束 uq_<table>_<cols>
+# ============================================================================
+
+
+class NormalizedMessage(Base):
+    """
+    L0 归一化后的标准消息。
+
+    来源：消费 twitter_posts / binance_square_posts / discord_messages 后产出。
+    消费端：
+      - EntityExtractor 扫 is_duplicate=FALSE 且 l1_processed_at IS NULL 的消息
+      - SlidingCounter 启动回填 simhash 索引
+
+    字段说明：
+      - raw_source + raw_id：指向来源表的逻辑引用（不建 FK，应用层幂等）
+      - author：三源统一后的作者字符串，Discord 为 "#<channel> @<user>"
+      - author_weight：预留给 KOL 权重，Phase 1 全部 = 1.0
+      - ts：消息发布/创建时间（UTC 归一）
+      - engagement：点赞+转发+回复汇总，Phase 1 三源都暂无，全部 = 0
+      - simhash：64 位 SimHash 指纹，用于 24h 内近似去重
+      - sentiment_score：[-1, +1]，Phase 1 全部 = 0（Non-Goals §11）
+      - is_duplicate / dup_of：SimHash 判重结果
+      - l1_processed_at：L1 实体抽取完成时间戳（NULL = 未处理）
+                         比布尔字段信息更丰富，Phase 2 可用于诊断 L1 延迟
+    """
+
+    __tablename__ = "normalized_messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    raw_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    raw_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    author_weight: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default="1.0"
+    )
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    engagement: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    simhash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    sentiment_score: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default="0"
+    )
+    is_duplicate: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    dup_of: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    l1_processed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "raw_source", "raw_id", name="uq_normalized_messages_source_raw"
+        ),
+        Index("idx_normalized_messages_ts", "ts"),
+        Index("idx_normalized_messages_source_ts", "raw_source", "ts"),
+        Index("idx_normalized_messages_simhash", "simhash"),
+        Index(
+            "idx_normalized_messages_is_duplicate_l1_processed_at",
+            "is_duplicate",
+            "l1_processed_at",
+        ),
+    )
+
+
+class EntityMention(Base):
+    """
+    L1 实体提及记录。
+
+    一对多关系：一条 NormalizedMessage 可挂 0~N 条 EntityMention。
+    msg_id 是 NormalizedMessage.id 的**逻辑引用**，不建外键（requirements.md Req 5.10）。
+
+    幂等写入由 UNIQUE(msg_id, entity) 保证：
+      - Entity_Extractor 对同一消息反复处理时走 ON CONFLICT DO NOTHING
+      - 满足 requirements.md Req 4.8
+
+    字段说明：
+      - entity：实体标准名（ticker 大写如 "BTC"，chain 保留原形如 "Base"）
+      - entity_type：ticker / chain / narrative / project / kol 之一
+      - confidence：Phase 1 只允许 1.0（词典命中）或 0.95（正则命中）
+      - is_kol_mention：author 是否命中 kols.yaml；Phase 1 只打标不计分
+      - engagement / author_weight：快照式冗余存储，避免后续 JOIN NormalizedMessage
+    """
+
+    __tablename__ = "entity_mentions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    msg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    entity: Mapped[str] = mapped_column(String(128), nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    raw_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    engagement: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    author_weight: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default="1.0"
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default="1.0"
+    )
+    is_kol_mention: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("msg_id", "entity", name="uq_entity_mentions_msg_entity"),
+        Index("idx_entity_mentions_entity_ts", "entity", "ts"),
+        Index("idx_entity_mentions_ts", "ts"),
+        Index("idx_entity_mentions_source_ts", "raw_source", "ts"),
+    )
+
+
+class HotnessSnapshot(Base):
+    """
+    L2 热度快照。
+
+    每 15 分钟 Hotness_Service 触发一次，对 Top-K 实体做 UPSERT 写入。
+    幂等键：(window_end, window_type, entity)。
+
+    字段说明：
+      - window_end：本轮对齐到 :00/:15/:30/:45 的窗口结束时刻
+      - window_type：Phase 1 固定 "1h"；Phase 2 会引入 "6h"/"24h" 多窗口
+      - count_short：短窗（默认 1h）内提及次数
+      - count_baseline：基线期每小时平均提及次数（float，可能是小数）
+      - growth_rate：short_count / max(baseline_per_hour, 2.0)
+      - cross_source：短窗内出现过的独立 raw_source 个数（1~3）
+      - engagement_sum：短窗内 engagement 累加（Phase 1 三源都为 0）
+      - is_new_entity：baseline=0 且 short_count >= 5
+      - final_score：growth_rate * (1 + 0.3 * (cross_source - 1))
+      - rank：1~top_k，按 final_score 降序（多级稳定排序见 Req 7.10）
+    """
+
+    __tablename__ = "hotness_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    window_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    window_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    entity: Mapped[str] = mapped_column(String(128), nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    count_short: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    count_baseline: Mapped[float | None] = mapped_column(Float, nullable=True)
+    growth_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cross_source: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    engagement_sum: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_new_entity: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    final_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "window_end",
+            "window_type",
+            "entity",
+            name="uq_hotness_snapshots_window_entity",
+        ),
+        Index(
+            "idx_hotness_snapshots_window_rank",
+            "window_end",
+            "window_type",
+            "rank",
+        ),
+        Index("idx_hotness_snapshots_entity_window", "entity", "window_end"),
+    )
+
+
 __all__ = [
     "Base",
     "TwitterPost",
@@ -238,4 +428,7 @@ __all__ = [
     "DiscordMessage",
     "SummaryLevel1",
     "SummaryLevel2",
+    "NormalizedMessage",
+    "EntityMention",
+    "HotnessSnapshot",
 ]
