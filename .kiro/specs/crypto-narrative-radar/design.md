@@ -274,10 +274,15 @@ for raw in raw_records:
 
 **YAML schema**：
 
+> **命名约定**：YAML 里的 `type:` 字段是**细分类**（category），会被 loader 存入 `DictionaryEntry.category`。
+> `DictionaryEntry.entity_type` 由所在**文件**硬决定（tickers.yaml → `ticker` / chains.yaml → `chain` / narratives.yaml → `narrative` / kols.yaml → `kol`），
+> 不允许被 YAML 覆盖——这是 Req 4.3 "五类约束"的强制落地方式。
+> 换句话说：`type: layer1` 只是告诉未来做叙事分组时 BTC 属于 L1，不会让 BTC 的 `entity_type` 变成 `layer1`。
+
 ```yaml
-# dictionaries/tickers.yaml
+# dictionaries/tickers.yaml（file-scope entity_type = ticker）
 BTC:
-  type: layer1
+  type: layer1                              # → DictionaryEntry.category
   aliases: [比特币, bitcoin, 大饼, 老大]
 ETH:
   type: layer1
@@ -287,22 +292,23 @@ HYPE:
   aliases: [hyperliquid, HL]
 # ... 覆盖现有 prefilter.py 的 COIN_KEYWORDS_EN（60+ 个）和 COIN_KEYWORDS_ZH（7 个）
 
-# dictionaries/chains.yaml
+# dictionaries/chains.yaml（file-scope entity_type = chain）
 Base:
   aliases: [Base L2, Coinbase L2]
 Solana:
   aliases: [SOL生态]
 
-# dictionaries/narratives.yaml
+# dictionaries/narratives.yaml（file-scope entity_type = narrative）
 AI_Agent:
   keywords: [AI agent, autonomous agent, agent protocol, ai16z]
 RWA:
   keywords: [real world asset, tokenized, RWA]
 
-# dictionaries/kols.yaml
+# dictionaries/kols.yaml（file-scope entity_type = kol）
 kol_xxx:
+  type: btc_kol                             # → DictionaryEntry.category，与 tickers.yaml 的 `type:` 字段同义
   weight: 3.0
-  category: btc_kol
+  aliases: ["@cz_binance", cz]
 ```
 
 **加载器代码**：
@@ -321,8 +327,9 @@ from loguru import logger
 
 @dataclass(frozen=True)
 class DictionaryEntry:
-    name: str               # 标准名，如 "BTC"
-    entity_type: str        # ticker / chain / narrative / kol
+    name: str                   # 标准名，如 "BTC"
+    entity_type: str            # ticker / chain / narrative / kol（由所在文件决定，不从 YAML 读）
+    category: str | None        # 细分类，如 layer1 / defi / meme；YAML 里的 `type:` 存到这里
     aliases: tuple[str, ...]    # 包含标准名本身 + 所有别名，全部小写
 
     # 仅 kol 类型使用
@@ -408,7 +415,11 @@ def _load_one(path: Path, entity_type: str) -> dict[str, DictionaryEntry]:
         )
         result[name] = DictionaryEntry(
             name=name,
-            entity_type=cfg.get("type", entity_type),
+            # ★ entity_type 由所在文件决定（ticker / chain / narrative / kol），不从 YAML 读，
+            #   硬落地 Req 4.3 的"五类约束"（project 类型由正则产生，不走词典）
+            entity_type=entity_type,
+            # YAML 里的 `type:` 改读作 category（细分类），Phase 1 只存不用，Phase 2+ 叙事分组时使用
+            category=(str(cfg["type"]) if "type" in cfg else None),
             aliases=aliases,
             weight=float(cfg.get("weight", 1.0)),
         )
@@ -639,7 +650,7 @@ class NormalizedMessage(Base):
         Index("idx_normalized_messages_source_ts", "raw_source", "ts"),
         Index("idx_normalized_messages_simhash", "simhash"),
         Index(
-            "idx_normalized_messages_unproc",
+            "idx_normalized_messages_is_duplicate_l1_processed_at",
             "is_duplicate", "l1_processed_at",
         ),  # 加速 entity_extractor 的扫描
     )
@@ -1352,7 +1363,7 @@ LIMIT 20;
 ### 7.1 为什么 SimHash 选 `simhash` 库而不是 `datasketch`
 
 - **语义契合**：Req 2.2 明确用汉明距离 ≤ 3，与 SimHash 天然匹配；`datasketch` 基于 Jaccard / MinHash，阈值与汉明距离不是一一映射。
-- **依赖轻量**：`simhash==2.1.2` 纯 Python 无额外依赖；`datasketch` 依赖 numpy 等。
+- **依赖取舍**：`simhash==2.1.2` 只依赖 numpy（传递依赖，约 30MB，纯 Python 代码本身 < 100 行）；`datasketch` 依赖 numpy + scipy + 更多。实测装了 simhash 只多拉了 numpy 一个传递依赖（Task 0.1 验证），且 numpy 在 Phase 2/3 升级 bge-m3 / HDBSCAN 时必然需要，**现在装等于预先铺路**。
 - **Phase 3 升级路径**：终极设计文档 §5.2 规划阶段二去重升级到 Embedding（bge-m3 + cosine），`datasketch` 不会被复用，现在装了是浪费。
 
 ### 7.2 为什么 Sliding_Counter 用 `deque` 而不是 Redis
@@ -1369,7 +1380,7 @@ requirements.md §15 明确 Non-Goals：**不引入 Redis**。Phase 1 单进程�
 
 - **省一张表**：中间表只为记一个"已处理"标记，信息量太小。
 - **TIMESTAMPTZ 胜 BOOLEAN**：存时间戳而不是布尔，Phase 2 调试时能直接看出"这条消息 L1 处理延迟多久"。
-- **索引友好**：`idx_normalized_messages_unproc(is_duplicate, l1_processed_at)` 一条索引覆盖 entity_extractor 的全部扫描需求。
+- **索引友好**：`idx_normalized_messages_is_duplicate_l1_processed_at(is_duplicate, l1_processed_at)` 一条索引覆盖 entity_extractor 的全部扫描需求。
 
 ### 7.5 为什么新 services 与老 level1/level2 共用同一个 worker 线程
 
@@ -1513,6 +1524,12 @@ alembic upgrade head  # 再升一次，验证幂等
 
 ---
 
-*文档版本：v1.0*
-*依赖：requirements.md v1.1（High/Medium 修复后）*
+*文档版本：v1.1（实施期校准）*
+*依赖：requirements.md v1.2（High/Medium 修复后）*
 *下一步：tasks.md（基于本 design 产出可勾选的 Phase 1 实施任务清单）*
+
+**v1.0 → v1.1 变更**：
+- §3.3 词典加载：明确 `DictionaryEntry.entity_type` 由**所在文件**硬决定（ticker/chain/narrative/kol），新增 `DictionaryEntry.category` 字段承载 YAML 里的 `type:` 细分类值（原先 `entity_type=cfg.get("type", ...)` 的写法会让 BTC 的 `entity_type` 被污染为 `"layer1"`，违反 Req 4.3 五类约束）
+- §3.3 YAML schema 样例：增加顶部"命名约定"说明 + 每个文件标注 file-scope entity_type；kols.yaml 的 `category:` 改为 `type:` 保持字段名统一
+- §7.1 SimHash 选型：修正"无额外依赖"描述，承认 numpy 是传递依赖但论证可接受
+- §7.4 索引命名：`idx_normalized_messages_unproc` → `idx_normalized_messages_is_duplicate_l1_processed_at`（与 tasks.md / models.py 对齐）
