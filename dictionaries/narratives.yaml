@@ -111,10 +111,9 @@ Prediction_Market:
 # ===== 稳定币 =====
 Stablecoin:
   type: stablecoin
-  keywords: [ stablecoin, stable coin, 稳定币赛道, 稳定币市场, 稳定币储备, Visa USDC, PayPal USDC]
+  keywords: [ stablecoin, stable coin, 稳定币赛道, 稳定币市场, 稳定币储备, Visa USDC, PayPal USDC ]
 
 # ===== CRCL公司 =====
 CRCL:
   type: stablecoin
-  keywords: [ CRCL, Circle, ARC ,Circle reserve]
-
+  keywords: [ CRCL, Circle, ARC ,Circle reserve, CLARITY法案 ]
