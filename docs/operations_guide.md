@@ -1073,6 +1073,7 @@ WHERE ts >= now() - INTERVAL '7 days';
 |---|---|
 | `README.md` | 项目介绍，架构背景 |
 | `docs/operations_guide.md`（本文）| 你现在看的：日常运维 + 调试 |
+| `docs/configuration.md` | **配置参数速查表**（60 个参数按 service 分组）|
 | `docs/faq_design_decisions.md` | 设计决策的"为什么"（Q1~Q11）|
 | `.kiro/specs/crypto-narrative-radar/requirements.md` | 需求文档（功能规格） |
 | `.kiro/specs/crypto-narrative-radar/design.md` | 架构设计文档 |

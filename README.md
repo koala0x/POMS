@@ -181,6 +181,7 @@ source .venv/bin/activate
 | 文档 | 看什么时候 |
 |---|---|
 | `docs/operations_guide.md` | 日常运维、调参、出问题排查（最常翻） |
+| `docs/configuration.md` | **配置参数速查表**（60 个参数按 service 分组） |
 | `docs/faq_design_decisions.md` | 设计决策"为什么"（Q1~Q11，含老链路淘汰说明） |
 | `文档/终极设计文档.md` | 项目早期 v3.0 整合设计文档（历史归档） |
 | `.kiro/specs/*/` | 各 Phase 子任务的 requirements / design / tasks 实施记录 |
