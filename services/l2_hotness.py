@@ -75,6 +75,16 @@ class HotnessService:
     min_baseline_count: int = 100
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
 
+    # 输出黑名单：这些 entity 不会出现在 hotness_snapshots 排行榜里。
+    # 用途：屏蔽 BTC/ETH/USDT 这种"提到很多但 growth ≈ 1"的常驻巨头，
+    # 让 Top-K 聚焦在真正"突然热"的新东西上。
+    # 关键设计点：
+    # - 只过滤"输出"，**不过滤** SlidingCounter / entity_mentions / 基线统计
+    #   → 大币的常态量仍被纳入基线；它们对其他实体 growth 计算无影响
+    # - 比较时不区分大小写（统一 .upper() 后比较），避免 yaml 大小写写错带来的混乱
+    # - 默认空 tuple 表示不屏蔽任何实体（保持向后兼容）
+    exclude_entities: tuple[str, ...] = ()
+
     # --- 运行时状态（mutable，所以 dataclass 不加 frozen）---
     _last_window_end: Optional[datetime] = None
     # main.py 在 SlidingCounter backfill 后注入：True=可跑，False=本轮跳过
@@ -137,6 +147,13 @@ class HotnessService:
         # ------ 计算 ------
         start_t = time.time()
         records = self._compute_records(window_end)
+
+        # 过滤黑名单：屏蔽常驻巨头（BTC/ETH 等），让 Top-K 聚焦新热点
+        # 注意时机：在排序之前过滤；不过滤 SlidingCounter / 基线，
+        # 所以大币对其他实体的 growth 计算不会失真
+        if self.exclude_entities:
+            excluded_set = {e.upper() for e in self.exclude_entities}
+            records = [r for r in records if r["entity"].upper() not in excluded_set]
 
         # Req 7.10 三级稳定排序：
         #   1. final_score 降序

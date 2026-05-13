@@ -280,6 +280,7 @@ def main() -> None:
         baseline_days=settings.hotness_baseline_days,
         min_baseline_count=settings.hotness_min_baseline_count,
         timezone=settings.timezone,
+        exclude_entities=settings.hotness_exclude_entities,
     )
 
     # Step 6：根据 SlidingCounter 回填结果决定 HotnessService 首轮是否敢跑
