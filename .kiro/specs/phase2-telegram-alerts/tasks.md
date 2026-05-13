@@ -11,28 +11,28 @@
 
 ## Task 0：依赖检查
 
-- [ ] **0.1 验证标准库 urllib 可用**
+- [x] **0.1 验证标准库 urllib 可用**
   - `.venv/bin/python -c "import urllib.request; print('ok')"`
   - 不需要 pip install 任何东西
   - 不动 requirements.txt
 
 ## Task 1：TelegramClient
 
-- [ ] **1.1 创建 `notifications/` 目录与 `__init__.py`**
+- [x] **1.1 创建 `notifications/` 目录与 `__init__.py`**
   - 空 `__init__.py` 文件
-- [ ] **1.2 实现 `notifications/telegram_client.py`**
+- [x] **1.2 实现 `notifications/telegram_client.py`**
   - 按 design.md §3.1 完整实现 `TelegramClient`（frozen dataclass）
   - `send_text` 方法：urllib.request POST → JSON 解析 → ok 字段判断
   - 4 类异常分支（HTTPError / URLError / 一般 Exception / API ok=False）
   - 文本超 4000 字符自动截断到 3997 + "..."
   - 不抛异常给调用方
-- [ ] **1.3 单元测试 `tests/test_telegram_client.py`**（5 个用例）
+- [x] **1.3 单元测试 `tests/test_telegram_client.py`**（5 个用例）
   - test_send_text_200_ok → True
   - test_send_text_http_error_returns_false → False（mock urlopen 抛 HTTPError 401）
   - test_send_text_network_error_returns_false → False（mock urlopen 抛 URLError）
   - test_send_text_unexpected_error_returns_false → False（mock urlopen 抛 RuntimeError）
   - test_send_text_truncates_long_message → 检查发出的 payload 字符数 ≤ 4000
-- [ ] **1.4 运行测试**
+- [x] **1.4 运行测试**
   - `.venv/bin/python -m pytest tests/test_telegram_client.py -v`
   - 预期 5 passed
   - 全量：`pytest tests/ --ignore=tests/test_ollama_client.py -q` 应 117 passed
@@ -41,28 +41,28 @@ _Requirements: Req 1, 6.1_
 
 ## Task 2：配置分组
 
-- [ ] **2.1 创建 `config/_alerts.py`**
+- [x] **2.1 创建 `config/_alerts.py`**
   - 按 design.md §3.3 实现 `AlertSettings`
   - 10 个字段：bot_token / chat_id / timeout_seconds / growth_threshold /
     min_count_short / min_cross_source / cooldown_minutes /
     **escalation_growth_multiplier / heartbeat_hours** / message_template
   - 默认 token / chat_id 为空字符串（生效=禁用告警）
-- [ ] **2.2 修改 `config/settings.py` 加入多继承**
+- [x] **2.2 修改 `config/settings.py` 加入多继承**
   - import AlertSettings
   - Settings 类继承顺序追加：
     `Settings(DatabaseSettings, RuntimeSettings, LegacySettings, NewPipelineSettings, AlertSettings)`
   - `__all__` 加 `AlertSettings`
-- [ ] **2.3 验证配置加载**
+- [x] **2.3 验证配置加载**
   - `.venv/bin/python -c "from config.settings import get_settings; s=get_settings(); print(s.alert_growth_threshold, s.telegram_bot_token)"`
   - 预期：`20.0 ` （后面是空字符串）
-- [ ] **2.4 运行测试**
+- [x] **2.4 运行测试**
   - 预期仍 117 passed（无新测试，但配置变更不能破坏现有）
 
 _Requirements: Req 4_
 
 ## Task 3：AlertTriggerService
 
-- [ ] **3.1 实现 `services/l2_alert_trigger.py`**
+- [x] **3.1 实现 `services/l2_alert_trigger.py`**
   - 按 design.md §3.2 完整实现
   - `AlertRecord` frozen dataclass：last_alerted_at / last_growth_rate / last_cross_source
   - `AlertTriggerService` 字段：db / hotness_repo / telegram_client /
@@ -72,7 +72,7 @@ _Requirements: Req 4_
   - 状态字段：_last_processed_window_end / _alert_records
   - 5 个方法：run_once / _is_eligible / **_decide_alert** / _render_message
   - 不 import llm.ollama_client
-- [ ] **3.2 单元测试 `tests/test_l2_alert_trigger.py`**（11 个用例，对应 design.md 测试矩阵）
+- [x] **3.2 单元测试 `tests/test_l2_alert_trigger.py`**（11 个用例，对应 design.md 测试矩阵）
   - test_first_alert_when_all_conditions_met（[首次] 标签）
   - test_alert_skipped_when_growth_below_threshold
   - test_alert_skipped_when_count_short_below_threshold
@@ -87,24 +87,24 @@ _Requirements: Req 4_
   - SQLite + Mock TelegramClient
   - 复用 Phase 1 同款的 `_SqliteHotnessSnapshotsRepo` pattern
   - 关键 mock：monkeypatch datetime.now() 来控制冷却 / 心跳判断
-- [ ] **3.3 运行测试**
+- [x] **3.3 运行测试**
   - 预期 117 + 11 = 128 passed
 
 _Requirements: Req 2, 3, 6.2, 7_
 
 ## Task 4：main.py 注入
 
-- [ ] **4.1 修改 `main.py` 追加 Step 5d**
+- [x] **4.1 修改 `main.py` 追加 Step 5d**
   - 按 design.md §3.4 实现
   - 关键防御：`if settings.telegram_bot_token and settings.telegram_chat_id`
     才构造 AlertTriggerService
   - 配置缺失时打 INFO 日志并跳过
-- [ ] **4.2 把 alert_service 加到 new_services 列表**
+- [x] **4.2 把 alert_service 加到 new_services 列表**
   - 在 normalizer / entity_extractor / hotness_service 之后追加
   - 调度顺序确保 Hotness 先于 AlertTrigger
-- [ ] **4.3 验证 main.py 仍能 import**
+- [x] **4.3 验证 main.py 仍能 import**
   - `.venv/bin/python -c "import main; print('ok')"`
-- [ ] **4.4 运行测试**
+- [x] **4.4 运行测试**
   - 预期仍 128 passed
 
 _Requirements: Req 5_

@@ -34,6 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
+from ._alerts import AlertSettings
 from ._database import DatabaseSettings
 from ._legacy import LegacySettings
 from ._new import NewPipelineSettings
@@ -46,18 +47,21 @@ class Settings(
     RuntimeSettings,
     LegacySettings,
     NewPipelineSettings,
+    AlertSettings,
 ):
     """
     全部配置的"扁平视图"。
 
-    通过 dataclass 多继承把 4 个分组合并到一个对象上。所有字段名跨分组
+    通过 dataclass 多继承把 5 个分组合并到一个对象上。所有字段名跨分组
     必须不重复（dataclass 多继承会因重名字段产生不可预期行为，loader 启动
     会报错或后定义覆盖前定义）。
 
     继承顺序的副作用：MRO 从左到右是
-        Settings → DatabaseSettings → RuntimeSettings → LegacySettings → NewPipelineSettings
+        Settings → DatabaseSettings → RuntimeSettings → LegacySettings
+                 → NewPipelineSettings → AlertSettings
     访问 `settings.<field>` 时按 MRO 找，所以同名字段以**靠左继承的优先**。
-    当前各分组字段名互不重叠，顺序不影响行为。
+    当前各分组字段名互不重叠（AlertSettings 全部带 alert_/telegram_ 前缀），
+    顺序不影响行为。
     """
 
 
@@ -76,9 +80,10 @@ def get_settings() -> Settings:
 __all__ = [
     "Settings",
     "get_settings",
-    # 顺带把 4 个分组类也导出，方便测试 / 类型标注精准引用某个子集
+    # 顺带把 5 个分组类也导出，方便测试 / 类型标注精准引用某个子集
     "DatabaseSettings",
     "RuntimeSettings",
     "LegacySettings",
     "NewPipelineSettings",
+    "AlertSettings",
 ]

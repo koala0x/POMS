@@ -293,6 +293,45 @@ def main() -> None:
 
     new_services = [normalizer_service, entity_extractor, hotness_service]
 
+    # Step 5d：AlertTriggerService（Phase 2 Task 2.2 — Telegram 实时告警）
+    # ---------------------------------------------------------------------
+    # 仅当 telegram_bot_token + telegram_chat_id 都非空才构造 Service。
+    # 任一为空 → log INFO 跳过（用户决策"先观察 hotness 再决定要不要开告警"，
+    # 不 raise 阻塞启动；requirements.md Req 4.3 / Req 5.4 / 硬约束 5）。
+    # 调度顺序：必须在 hotness_service 之后（保证最新榜单已写入再扫描）。
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        from notifications.telegram_client import TelegramClient
+        from services.l2_alert_trigger import AlertTriggerService
+
+        telegram_client = TelegramClient(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+            timeout_seconds=settings.telegram_timeout_seconds,
+        )
+        alert_service = AlertTriggerService(
+            db=db,
+            hotness_repo=hotness_repo,
+            telegram_client=telegram_client,
+            growth_threshold=settings.alert_growth_threshold,
+            min_count_short=settings.alert_min_count_short,
+            min_cross_source=settings.alert_min_cross_source,
+            cooldown_minutes=settings.alert_cooldown_minutes,
+            escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
+            heartbeat_hours=settings.alert_heartbeat_hours,
+            message_template=settings.alert_message_template,
+        )
+        new_services.append(alert_service)
+        logger.info(
+            "AlertTriggerService 启动：growth_threshold={} cooldown={}min "
+            "escalation×{} heartbeat={}h",
+            settings.alert_growth_threshold,
+            settings.alert_cooldown_minutes,
+            settings.alert_escalation_growth_multiplier,
+            settings.alert_heartbeat_hours,
+        )
+    else:
+        logger.info("Telegram 告警未配置（token/chat_id 为空），已禁用")
+
     # Step 7：Jobs 构造时注入 new_services
     # 调度层:level1 / level2 / new_services 共用一个 worker 线程串行触发
     jobs = Jobs(
