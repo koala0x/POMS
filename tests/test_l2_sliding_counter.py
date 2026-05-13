@@ -381,3 +381,35 @@ def test_backfill_db_exception(monkeypatch, loguru_capture) -> None:
     )
     # 必须明确是"backfill failed"，便于运维 grep
     assert any("backfill failed" in m for m in err_msgs)
+
+
+# ===========================================================================
+# Phase 2.1 多窗口扩展：6h 窗口（Task 1）
+# ===========================================================================
+
+
+def test_count_6h_window(monkeypatch) -> None:
+    """
+    Phase 2.1 Req 1：WINDOWS_SECONDS 加入 '6h': 21600 后，
+    count('6h') / active_entities('6h') 应正常工作。
+
+    场景：3 小时前 add 一次。
+    - count('1h')  应返回 0（已超 1h 窗口）
+    - count('6h')  应返回 1（在 6h 窗口内 ★ 新增）
+    - count('24h') 应返回 1
+    - count('7d')  应返回 1
+    """
+    sc = SlidingCounter()
+    fixed_now = 1_700_000_000.0
+    monkeypatch.setattr(sc_module.time, "time", lambda: fixed_now)
+
+    # 3 小时前（在 6h 内、1h 外）
+    sc.add("MID", fixed_now - 3 * 3600)
+
+    assert sc.count("MID", "1h") == 0, "3h 前的 ts 应已超 1h 窗口"
+    assert sc.count("MID", "6h") == 1, "3h 前的 ts 应在 6h 窗口内（Phase 2.1 新增）"
+    assert sc.count("MID", "24h") == 1
+    assert sc.count("MID", "7d") == 1
+
+    # active_entities('6h') 也应能正常返回
+    assert "MID" in sc.active_entities("6h")

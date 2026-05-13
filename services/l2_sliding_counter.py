@@ -3,9 +3,9 @@ from __future__ import annotations
 """
 L2 滑动窗口计数器（进程内内存单例）。
 
-职责（对应 requirements.md Req 6）：
-- 维护四个固定窗口（15min / 1h / 24h / 7d）下每个 entity 的提及时间戳 deque
-- `add(entity, ts)`：把一次提及记入所有四个窗口
+职责（对应 requirements.md Req 6 + Phase 2.1 多窗口扩展）：
+- 维护五个固定窗口（15min / 1h / 6h / 24h / 7d）下每个 entity 的提及时间戳 deque
+- `add(entity, ts)`：把一次提及记入所有五个窗口
 - `count(entity, window)`：惰性清理窗口外的旧数据后返回当前计数
 - `active_entities(window)`：返回在该窗口内至少被提及过一次的全部实体
   （供 HotnessService 扫描候选集用，避免遍历全部历史 entity）
@@ -32,12 +32,15 @@ from loguru import logger
 from sqlalchemy import select
 
 
-# 四个固定窗口 —— 与 design.md §3.6 对齐
-# 窗口名（15min / 1h / 24h / 7d）是 count(entity, window) 的合法取值，
+# 五个固定窗口 —— 与 design.md §3.6 对齐
+# 窗口名（15min / 1h / 6h / 24h / 7d）是 count(entity, window) 的合法取值，
 # 单位是秒，供 cutoff 计算直接用。
+# Phase 2.1 多窗口热度排行榜新增 '6h'：让 HotnessService 能产出 6h 中期榜，
+# add() 一次写入会同步追加到所有 5 个窗口的 deque（基于 WINDOWS_SECONDS 迭代）。
 WINDOWS_SECONDS: dict[str, int] = {
     "15min": 900,
     "1h": 3600,
+    "6h": 21600,
     "24h": 86400,
     "7d": 604800,
 }
@@ -46,7 +49,7 @@ WINDOWS_SECONDS: dict[str, int] = {
 @dataclass
 class SlidingCounter:
     """
-    四窗口滑动计数器。
+    五窗口滑动计数器。
 
     `_store` 结构：
       {
@@ -75,7 +78,7 @@ class SlidingCounter:
         """
         记录一次提及。
 
-        同一个 ts 同时追加到四个窗口的 deque 末尾；不做重复性检查——
+        同一个 ts 同时追加到五个窗口的 deque 末尾；不做重复性检查——
         EntityExtractor 写 entity_mention 时已有 UNIQUE(msg_id, entity) 兜底，
         同一 (msg, entity) 在 DB 层不会重复，内存侧也就不会重复 add。
         """
@@ -86,7 +89,7 @@ class SlidingCounter:
         """
         返回 `entity` 在 `window` 内的提及次数。
 
-        - window 不合法（不在 WINDOWS_SECONDS 的 4 个 key 里）→ raise ValueError
+        - window 不合法（不在 WINDOWS_SECONDS 的 5 个 key 里）→ raise ValueError
         - 惰性清理：从 deque 左端 popleft 所有 ts < cutoff 的条目
         - 空 entity（从未 add 过）返回 0，不在 `_store` 里留占位项
         """
@@ -134,7 +137,7 @@ class SlidingCounter:
         chunk_size: int = 10_000,
     ) -> tuple[bool, int, float]:
         """
-        从 `entity_mentions` 回填最近 7 天的提及数据，重建四窗口内存索引。
+        从 `entity_mentions` 回填最近 7 天的提及数据，重建五窗口内存索引。
 
         返回三元组 `(是否成功, 回填条数, 实际耗时秒)`。
 

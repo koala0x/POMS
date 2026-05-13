@@ -68,18 +68,29 @@ cd /Users/ye/Work/Crypto/PomsAI
 老链路已关闭（settings.disable_legacy_pipeline=True）：跳过 Ollama 客户端与 Level1/Level2 Service 初始化
 词典就绪：tickers=57 chains=0 narratives=0 kols=0 aliases=64
 SlidingCounter backfill 结束：ok=True total=<N> elapsed=<X.X>s
+HotnessService(1h)  启动：top_k=20 smoothing=2.0  baseline_days=7 min_baseline_count=100
+HotnessService(6h)  启动：top_k=20 smoothing=5.0  baseline_days=7 min_baseline_count=200
+HotnessService(24h) 启动：top_k=20 smoothing=10.0 baseline_days=8 min_baseline_count=500
 AlertTriggerService 启动：growth_threshold=20.0 cooldown=60min escalation×1.5 heartbeat=6h
-服务启动成功:worker 只跑新链路 (Phase 1 new services=4，空闲 sleep 30s)
+服务启动成功:worker 只跑新链路 (Phase 1 new services=6，空闲 sleep 30s)
 ```
 
 > 说明：`disable_legacy_pipeline` 默认 `True`，只跑新链路（Phase 1 热度排行榜）。
 > 想把老链路 LLM 摘要打开，改 `config/settings.py` 里 `disable_legacy_pipeline: bool = True` → `False`，
 > 然后重启服务。代码本身不用动。
 >
-> AlertTriggerService 是 Phase 2 新增的 Telegram 告警服务。`telegram_bot_token` /
+> **Phase 2.1 新增**：`HotnessService` 现在跑三个实例（1h / 6h / 24h），分别产出
+> 短中长三档窗口的排行榜，全部写到同一张 `hotness_snapshots` 表（`window_type` 列区分）。
+> 任一窗口实例可通过 `hotness_6h_enabled` / `hotness_24h_enabled` 配置关闭（详见 §6.2）。
+> 6h/24h 实例构造失败时只 log.error 不阻塞启动，1h 必需。
+>
+> AlertTriggerService 是 Phase 2.2 新增的 Telegram 告警服务。`telegram_bot_token` /
 > `telegram_chat_id` 任一为空时不会出现这一行启动日志，会变成
 > `Telegram 告警未配置（token/chat_id 为空），已禁用`，告警系统整体跳过初始化，
-> hotness 主流程不受影响。详见 §6 "Telegram 告警调参"。
+> hotness 主流程不受影响。详见 §6.1 "Telegram 告警调参"。
+>
+> **AlertTriggerService 当前只读 1h 榜**，新增的 6h / 24h 榜对它完全透明。
+> 未来 Phase 2.2.1 会扩展成多通道告警（给 6h / 24h 各配独立 threshold）。
 
 后台跑：
 
@@ -342,6 +353,11 @@ EOF
 | **告警冷却时长** | `alert_cooldown_minutes: 60 → 30` | 缩短同实体两次告警的最小间隔；常规情况下 60 分钟够用 |
 | **告警升级灵敏度** | `alert_escalation_growth_multiplier: 1.5 → 2.0` | 数字越大"升级告警"越难触发，越保守 |
 | **持续热点心跳间隔** | `alert_heartbeat_hours: 6 → 12` | 持续热点最长不告警时长；调长则"持续 Nh"提醒更稀 |
+| **关闭 6h 中期榜** | `hotness_6h_enabled: True → False` | False 时跳过该实例构造，零运行时开销；详见 §6.2 |
+| **关闭 24h 长期榜** | `hotness_24h_enabled: True → False` | 同上 |
+| **6h 榜灵敏度** | `hotness_6h_smoothing: 5.0 → 3.0`（更敏感）/ `→ 8.0`（更稳） | smoothing 是 growth 公式分母平滑值，**调小**让冷启动期 growth 更激进、调大更稳健 |
+| **24h 榜灵敏度** | `hotness_24h_smoothing: 10.0 → 5.0` 或 `→ 20.0` | 同上 |
+| **24h 榜屏蔽 BTC/ETH** | `hotness_24h_exclude_entities: ("USDT","USDC","DAI","BTC","ETH")` | 默认 24h 不屏蔽 BTC/ETH（看宏观信号），如果觉得吵就加回去 |
 
 **注意**：改 DB 配置（`db_host` / `db_port` 等）后重启前先 `psql` 测一下新地址
 通不通，免得进程起来又挂。
@@ -410,6 +426,100 @@ grep "alert skipped" logs/service.log | tail -10
 grep "telegram .*error" logs/service.log | tail -10
 ```
 
+### 6.2 多窗口热度排行榜调参（Phase 2.1 新增）
+
+Phase 2.1 把 `HotnessService` 由"单实例（1h）"扩展为"三实例（1h / 6h / 24h）"，
+三份榜同时写到 `hotness_snapshots` 表，靠 `window_type` 列区分：
+
+```
+1h  ← Phase 1 已有，沿用全部默认值（不动）
+6h  ← Phase 2.1 新增，中期信号（半天级趋势）
+24h ← Phase 2.1 新增，长期信号（宏观新闻级事件）
+```
+
+#### 默认参数对照表
+
+| 字段 | 1h（Phase 1）| 6h | 24h | 设计意图 |
+|---|---|---|---|---|
+| `enabled` | 永远开 | `True` | `True` | 6h/24h 可独立关闭 |
+| `top_k` | 20 | 20 | 20 | 三窗口同样宽度 |
+| `smoothing` | 2.0 | 5.0 | 10.0 | smoothing 等比放大，避免冷启动期 growth 虚高 |
+| `baseline_days` | 7 | 7 | **8** | 24h 必须 ≥ 8（数学约束：`baseline_days*24 - short_hours > 0`）|
+| `min_baseline_count` | 100 | 200 | 500 | 长窗信号需要更多样本才稳定 |
+| `exclude_entities` | 屏蔽 7 种 | 同 1h | **只屏蔽稳定币** | 24h 维度的 BTC/ETH 大新闻是真信号 |
+
+#### 选哪个窗口看什么
+
+| 维度 | 用途 | 例子 |
+|---|---|---|
+| 1h | 立刻冒头的瞬间热点 | `$WIFHAT` 5 分钟前突然被刷屏 |
+| 6h | 半天级中期趋势 | 某个叙事下午开始有人聊，到晚上还在烧 |
+| 24h | 全天级宏观信号 | BTC 跌破关键支撑，全天讨论量翻 5 倍 |
+
+#### 看三窗口数据的 SQL
+
+```sql
+-- 看每个窗口的最新榜单各 5 名
+SELECT window_type, rank, entity, growth_rate, count_short, cross_source
+FROM hotness_snapshots
+WHERE (window_type, window_end) IN (
+  SELECT window_type, MAX(window_end)
+  FROM hotness_snapshots
+  GROUP BY window_type
+)
+  AND rank <= 5
+ORDER BY window_type, rank;
+
+-- 看三窗口共振（同一 entity 在三个窗口都进 Top-10 = 强信号）
+WITH latest AS (
+  SELECT window_type, MAX(window_end) AS window_end
+  FROM hotness_snapshots
+  GROUP BY window_type
+)
+SELECT entity, ARRAY_AGG(window_type ORDER BY window_type) AS hits
+FROM hotness_snapshots h
+JOIN latest l USING (window_type, window_end)
+WHERE h.rank <= 10
+GROUP BY entity
+HAVING COUNT(DISTINCT window_type) = 3;
+```
+
+#### 冷启动期注意事项
+
+24h 榜需要 `entity_mentions` 累计 ≥ 500 条才出榜，新部署服务后**头 8~12 小时**
+24h 榜会是空的，日志里会看到：
+
+```
+hotness skipped: baseline data insufficient (count=<N> < 500)
+```
+
+这是正常行为不是 bug。等数据攒够自然出榜；想强行看可以临时改
+`hotness_24h_min_baseline_count` 到 100，重启 + 下一个 quarter 就有。
+
+#### 关闭某个窗口
+
+```python
+# config/_new.py
+hotness_6h_enabled: bool = False   # 关掉 6h 榜
+hotness_24h_enabled: bool = False  # 关掉 24h 榜
+```
+
+重启后日志会显示 `HotnessService(6h) 未启用（hotness_6h_enabled=False）`，
+该实例不构造，零运行时开销。**1h 不能关**——它是核心窗口，关了等于没用。
+
+#### 看多窗口相关日志
+
+```bash
+# 看三个窗口的 hotness 触发
+grep "hotness window_end" logs/service.log | tail -10
+
+# 看 24h 窗口的基线不足跳过
+grep "baseline data insufficient" logs/service.log | tail -10
+
+# 看 6h/24h 实例构造失败（一般是 settings 配错触发 __post_init__ raise）
+grep "HotnessService(.*) 构造失败" logs/service.log | tail -5
+```
+
 ---
 
 ## 7. 跑测试（验证改动没破坏东西）
@@ -423,11 +533,13 @@ grep "telegram .*error" logs/service.log | tail -10
 应看到：
 
 ```
-128 passed, 1 skipped in X.XXs
+135 passed, 1 skipped in X.XXs
 ```
 
-> 测试基线演进：Phase 1 109 → +3（黑名单）= 112 → Phase 2 +5（telegram_client）
-> +11（l2_alert_trigger）= **128 passed**。改了代码后 pass 数应只增不减。
+> 测试基线演进：Phase 1 109 → +3（黑名单）= 112 → Phase 2.2 +5（telegram_client）
+> +11（l2_alert_trigger）= 128 → Phase 2.1 多窗口 +1（sliding_counter '6h'）
+> +5（hotness 多窗口）+1（alert 兼容性回归）= **135 passed**。
+> 改了代码后 pass 数应只增不减。
 
 只跑某个模块的测试：
 

@@ -267,13 +267,20 @@ def main() -> None:
         batch_size=settings.entity_extractor_batch_size,
     )
 
-    # Step 5c：HotnessService（entity_mentions + sliding_counter → hotness_snapshots）
-    # ★ 同一 sliding_counter 实例；默认值由 Settings 承接（Task 8.2 新增的 hotness_* 字段）
-    hotness_service = HotnessService(
+    # Step 5c：HotnessService 多实例（Phase 2.1 多窗口热度排行榜）
+    # ---------------------------------------------------------------------
+    # 三个实例 [1h, 6h, 24h] 共享同一个 sliding_counter / mentions_repo /
+    # hotness_repo 引用——关键不变量，否则短窗计数对不上。
+    # 1h 必需（构造失败应阻塞启动）；6h / 24h 可降级（构造失败只 log.error）。
+    # ---------------------------------------------------------------------
+
+    # Step 5c.1：1h 实例（必需，沿用 Phase 1 行为）
+    hotness_1h = HotnessService(
         db=db,
         mentions_repo=mentions_repo,
         hotness_repo=hotness_repo,
         sliding_counter=sliding_counter,
+        window_type="1h",
         top_k=settings.hotness_top_k,
         smoothing=settings.hotness_smoothing,
         short_hours=settings.hotness_short_hours,
@@ -282,16 +289,91 @@ def main() -> None:
         timezone=settings.timezone,
         exclude_entities=settings.hotness_exclude_entities,
     )
+    hotness_services: list[HotnessService] = [hotness_1h]
+    logger.info(
+        "HotnessService(1h) 启动：top_k={} smoothing={} baseline_days={} "
+        "min_baseline_count={}",
+        settings.hotness_top_k,
+        settings.hotness_smoothing,
+        settings.hotness_baseline_days,
+        settings.hotness_min_baseline_count,
+    )
 
-    # Step 6：根据 SlidingCounter 回填结果决定 HotnessService 首轮是否敢跑
-    # 回填失败时本轮跳过并自动置回 True，给下一轮机会（见 HotnessService.run_once）
-    hotness_service._counter_ready = sc_ok
+    # Step 5c.2：6h 实例（可选，构造失败只 log.error 不阻塞启动）
+    if settings.hotness_6h_enabled:
+        try:
+            hotness_6h = HotnessService(
+                db=db,
+                mentions_repo=mentions_repo,
+                hotness_repo=hotness_repo,
+                sliding_counter=sliding_counter,
+                window_type="6h",
+                top_k=settings.hotness_6h_top_k,
+                smoothing=settings.hotness_6h_smoothing,
+                short_hours=6,
+                baseline_days=settings.hotness_6h_baseline_days,
+                min_baseline_count=settings.hotness_6h_min_baseline_count,
+                timezone=settings.timezone,
+                exclude_entities=settings.hotness_6h_exclude_entities,
+            )
+            hotness_services.append(hotness_6h)
+            logger.info(
+                "HotnessService(6h) 启动：top_k={} smoothing={} baseline_days={} "
+                "min_baseline_count={}",
+                settings.hotness_6h_top_k,
+                settings.hotness_6h_smoothing,
+                settings.hotness_6h_baseline_days,
+                settings.hotness_6h_min_baseline_count,
+            )
+        except ValueError as e:
+            # __post_init__ 校验失败（baseline 数学约束 / window_type 拼错）
+            # 不阻塞启动，1h 实例继续工作
+            logger.error("HotnessService(6h) 构造失败已跳过：{}", e)
+    else:
+        logger.info("HotnessService(6h) 未启用（hotness_6h_enabled=False）")
+
+    # Step 5c.3：24h 实例（可选）
+    if settings.hotness_24h_enabled:
+        try:
+            hotness_24h = HotnessService(
+                db=db,
+                mentions_repo=mentions_repo,
+                hotness_repo=hotness_repo,
+                sliding_counter=sliding_counter,
+                window_type="24h",
+                top_k=settings.hotness_24h_top_k,
+                smoothing=settings.hotness_24h_smoothing,
+                short_hours=24,
+                baseline_days=settings.hotness_24h_baseline_days,
+                min_baseline_count=settings.hotness_24h_min_baseline_count,
+                timezone=settings.timezone,
+                exclude_entities=settings.hotness_24h_exclude_entities,
+            )
+            hotness_services.append(hotness_24h)
+            logger.info(
+                "HotnessService(24h) 启动：top_k={} smoothing={} baseline_days={} "
+                "min_baseline_count={}",
+                settings.hotness_24h_top_k,
+                settings.hotness_24h_smoothing,
+                settings.hotness_24h_baseline_days,
+                settings.hotness_24h_min_baseline_count,
+            )
+        except ValueError as e:
+            logger.error("HotnessService(24h) 构造失败已跳过：{}", e)
+    else:
+        logger.info("HotnessService(24h) 未启用（hotness_24h_enabled=False）")
+
+    # Step 6：根据 SlidingCounter 回填结果决定所有 HotnessService 实例首轮是否敢跑
+    # 回填失败时各实例本轮自跳过 + 自动置回 True，给下一轮机会
+    for svc in hotness_services:
+        svc._counter_ready = sc_ok
     if not sc_ok:
         logger.warning(
-            "SlidingCounter backfill 失败，HotnessService 首轮会自动跳过，下一轮继续"
+            "SlidingCounter backfill 失败，{} 个 HotnessService 实例首轮都会自动跳过",
+            len(hotness_services),
         )
 
-    new_services = [normalizer_service, entity_extractor, hotness_service]
+    new_services = [normalizer_service, entity_extractor, *hotness_services]
 
     # Step 5d：AlertTriggerService（Phase 2 Task 2.2 — Telegram 实时告警）
     # ---------------------------------------------------------------------

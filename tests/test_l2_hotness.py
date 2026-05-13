@@ -785,3 +785,218 @@ def loguru_capture():
         yield records
     finally:
         logger.remove(sink_id)
+
+
+# ===========================================================================
+# Phase 2.1 多窗口扩展（Task 2）
+# ---------------------------------------------------------------------------
+# 验证 HotnessService.window_type 字段 + __post_init__ 三道校验，
+# 以及多窗口下 _compute_records 的两个改动点：
+#   - count(entity, self.window_type)
+#   - active_entities("7d" if self.window_type == "24h" else "24h")
+# ===========================================================================
+
+
+def test_hotness_24h_baseline_days_lt_8_raises() -> None:
+    """
+    Phase 2.1 Req 2.2 校验 3：baseline_days * 24 - short_hours <= 0 触发 raise。
+
+    24h 窗口 + baseline_days=7 → 7*24-24 = 144 数学上 > 0 但语义错乱
+    （基线只剩 6 天）；
+    更极端 baseline_days=1 → 1*24-24 = 0 直接触发；
+    本用例用 7 天验证：requirements 把 24h 默认 baseline_days 锁成 8。
+    """
+    sc = MagicMock()
+    repo = MagicMock()
+
+    # baseline_days=7 + short_hours=24 → 7*24-24 = 144 > 0，不触发 raise
+    # 但要演示"边界数学约束"，用更小的值制造 <= 0
+    with pytest.raises(ValueError, match="baseline_days"):
+        HotnessService(
+            db=_FakeDatabase(),
+            mentions_repo=repo,
+            hotness_repo=MagicMock(),
+            sliding_counter=sc,
+            window_type="24h",
+            short_hours=24,
+            baseline_days=1,  # 1*24-24 = 0 触发分母 ≤ 0
+            top_k=20,
+            smoothing=10.0,
+            min_baseline_count=500,
+            timezone=ZoneInfo("UTC"),
+        )
+
+
+def test_hotness_window_type_unknown_raises() -> None:
+    """
+    Phase 2.1 Req 2.2 校验 1：window_type 不在 WINDOWS_SECONDS 时 raise。
+    """
+    sc = MagicMock()
+    repo = MagicMock()
+    with pytest.raises(ValueError, match="window_type=.*'2h'.*不支持"):
+        HotnessService(
+            db=_FakeDatabase(),
+            mentions_repo=repo,
+            hotness_repo=MagicMock(),
+            sliding_counter=sc,
+            window_type="2h",  # 不存在的窗口名
+            short_hours=2,
+            baseline_days=7,
+            timezone=ZoneInfo("UTC"),
+        )
+
+
+def test_hotness_window_type_short_hours_mismatch_raises() -> None:
+    """
+    Phase 2.1 Req 2.2 校验 2：short_hours 与 window_type 隐含小时数不一致 → raise。
+
+    例：window_type='6h' 应隐含 short_hours=6，传 short_hours=1 应 raise。
+    """
+    sc = MagicMock()
+    repo = MagicMock()
+    with pytest.raises(ValueError, match="short_hours"):
+        HotnessService(
+            db=_FakeDatabase(),
+            mentions_repo=repo,
+            hotness_repo=MagicMock(),
+            sliding_counter=sc,
+            window_type="6h",
+            short_hours=1,  # 与 6h 不一致
+            baseline_days=7,
+            timezone=ZoneInfo("UTC"),
+        )
+
+
+def test_hotness_6h_writes_window_type_6h(monkeypatch) -> None:
+    """
+    Phase 2.1 Req 2.3 集成：6h 实例的 _compute_records 应：
+    1. 调用 sliding_counter.count(entity, '6h')
+    2. upsert_batch 写入时传 window_type='6h'
+    3. growth_rate 用 6h smoothing 公式：60 / max(100/162, 5.0) = 60/5 = 12.0
+    """
+    # 6h 实例：smoothing=5.0 / baseline_days=7 / short_hours=6
+    sc = MagicMock()
+    sc.active_entities.return_value = ["NEWMEME"]
+    # count('6h') 返回 60；其它窗口返回 0（保证只走 6h 路径）
+    sc.count.side_effect = lambda entity, window: 60 if window == "6h" else 0
+
+    repo = _make_mock_mentions_repo(
+        baseline_totals={"NEWMEME": 100},
+        cross_sources={"NEWMEME": 2},
+        count_since_value=300,  # > min_baseline_count=200
+    )
+    hotness_repo = MagicMock()
+
+    svc = HotnessService(
+        db=_FakeDatabase(),
+        mentions_repo=repo,
+        hotness_repo=hotness_repo,
+        sliding_counter=sc,
+        window_type="6h",
+        short_hours=6,
+        top_k=20,
+        smoothing=5.0,
+        baseline_days=7,
+        min_baseline_count=200,
+        timezone=ZoneInfo("UTC"),
+    )
+
+    # 冻结 datetime.now 让 window_end 固定
+    import services.l2_hotness as hotness_mod
+
+    fake_now = datetime(2026, 5, 14, 10, 0, 5, tzinfo=ZoneInfo("UTC"))
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz:
+                return fake_now.astimezone(tz)
+            return fake_now
+
+    monkeypatch.setattr(hotness_mod, "datetime", _FakeDateTime)
+
+    assert svc.run_once() is True
+
+    # 验证 1：upsert_batch 调用时 window_type='6h'
+    call = hotness_repo.upsert_batch.call_args
+    assert call.kwargs["window_type"] == "6h", (
+        f"6h 实例应写 window_type='6h'，实际：{call.kwargs['window_type']}"
+    )
+
+    # 验证 2：sliding_counter.count 用 '6h' 调用过
+    sc.count.assert_any_call("NEWMEME", "6h")
+
+    # 验证 3：growth_rate 公式
+    # baseline_per_hour = 100 / (7*24-6) = 100/162 ≈ 0.617
+    # max(0.617, smoothing=5.0) = 5.0
+    # growth_rate = 60 / 5.0 = 12.0
+    rec = call.kwargs["records"][0]
+    assert rec["entity"] == "NEWMEME"
+    assert abs(rec["growth_rate"] - 12.0) < 0.01, (
+        f"growth_rate 应 ≈ 12.0，实际 {rec['growth_rate']}"
+    )
+
+
+def test_hotness_24h_uses_7d_active_entities(monkeypatch) -> None:
+    """
+    Phase 2.1 Req 2.3：24h 实例的候选集应来自 active_entities('7d')，
+    而不是 active_entities('24h')——让候选涵盖 24 小时前刚活跃过的边缘 entity。
+    """
+    sc = MagicMock()
+    # 区分两个窗口的返回值，确保 service 选了正确那个
+    def _active(window):
+        if window == "7d":
+            return ["FROM_7D"]
+        if window == "24h":
+            return ["FROM_24H"]
+        raise AssertionError(f"unexpected active_entities window={window}")
+
+    sc.active_entities.side_effect = _active
+    sc.count.side_effect = lambda entity, window: 80 if window == "24h" else 0
+
+    repo = _make_mock_mentions_repo(
+        baseline_totals={"FROM_7D": 100, "FROM_24H": 100},
+        cross_sources={"FROM_7D": 2, "FROM_24H": 2},
+        count_since_value=1000,  # > min_baseline_count=500
+    )
+    hotness_repo = MagicMock()
+
+    svc = HotnessService(
+        db=_FakeDatabase(),
+        mentions_repo=repo,
+        hotness_repo=hotness_repo,
+        sliding_counter=sc,
+        window_type="24h",
+        short_hours=24,
+        top_k=20,
+        smoothing=10.0,
+        baseline_days=8,
+        min_baseline_count=500,
+        timezone=ZoneInfo("UTC"),
+    )
+
+    import services.l2_hotness as hotness_mod
+
+    fake_now = datetime(2026, 5, 14, 10, 0, 5, tzinfo=ZoneInfo("UTC"))
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz:
+                return fake_now.astimezone(tz)
+            return fake_now
+
+    monkeypatch.setattr(hotness_mod, "datetime", _FakeDateTime)
+
+    assert svc.run_once() is True
+
+    # 关键断言：active_entities 用 '7d' 调过
+    sc.active_entities.assert_called_with("7d")
+
+    # 验证：写入的 entity 来自 7d 候选集
+    call = hotness_repo.upsert_batch.call_args
+    names = {r["entity"] for r in call.kwargs["records"]}
+    assert names == {"FROM_7D"}, (
+        f"24h 实例 candidates 应来自 active_entities('7d')，实际：{names}"
+    )
+    assert call.kwargs["window_type"] == "24h"

@@ -16,6 +16,7 @@
 4. [Q4：narratives 和 tickers 怎么区分？我不知道某个名字该归到哪里](#q4)
 5. [Q5："热点"和"提到最多"有什么区别？](#q5)
 6. [Q6：Telegram 告警为什么冷却 60 分钟而不持久化？没收到告警怎么排查？](#q6)
+7. [Q7：为什么需要三个时间窗口（1h / 6h / 24h），不能只看 1h 吗？](#q7)
 
 ---
 
@@ -922,4 +923,149 @@ print('result:', client.send_text('PomsAI 告警链路联调测试'))
 **冷却用进程内 dict 而不持久化**——成本几乎为 0，最坏代价（重启多发 1 条）
 完全可接受。**没收到告警**按上面 Step 1→5 顺序排查，99% 落在 Step 3/4
 （hotness 自身没产出 / 没合格实体），跟告警系统本身无关。
+
+
+
+---
+
+## <a id="q7"></a>Q7：为什么需要三个时间窗口（1h / 6h / 24h），不能只看 1h 吗？
+
+**短答**：
+
+- **1h 窗口的本质局限**：噪音大、看不到中期趋势、看不到宏观信号——一份榜
+  没法兼顾"最快冒头""半天演进""全天宏观"三种不同时间尺度的信号
+- **三窗口的工程代价几乎为零**：DB 体积一年多 4 GB（PG 实例还有 100 GB 富余）；
+  CPU 多 5%（每 15 分钟多算两份榜）；Phase 1 已有的 SlidingCounter 天然支持多窗口
+- **三窗口产出语义互补**：1h surface 即时热点、6h surface 中期趋势、24h surface
+  宏观事件；三个窗口对同一 entity 的 growth_rate 自然衰减，从分布就能读出"信号
+  到底有多强"
+
+### Q7.1 用大白话讲三个窗口看什么
+
+想象你监控一个微信群：
+
+| 维度 | 它告诉你的事 | 真实例子 |
+|---|---|---|
+| 1h | 最近 1 小时谁在被疯狂提及 | `$WIFHAT` 5 分钟前突然被刷屏 |
+| 6h | 最近半天谁在持续被讨论 | 某叙事下午开始有人聊，到晚上还在烧 |
+| 24h | 最近一整天谁在做主线 | BTC 跌破关键支撑，全天讨论量翻 5 倍 |
+
+**为什么 1h 不够**：1h 维度的 BTC 永远在被讨论，growth_rate ≈ 1.0，全天看上去都
+"很无聊"——但 BTC 真有大新闻时，**24h 维度**的提及量会翻 5~10 倍，那才是真信号。
+反过来，新 meme 币上线 1 小时内就爆火，**1h 维度**才能立刻 surface 它，6h/24h
+窗口要等很久才反应过来。
+
+### Q7.2 公式怎么自然衰减
+
+三窗口共用 Phase 1 同一个 hotness 公式：
+
+```
+growth_rate = short_count / max(baseline_per_hour, smoothing)
+final_score = growth_rate * (1 + 0.3 * (cross_source - 1))
+```
+
+只有 `short_count` 和 `smoothing` 两个值随窗口变化：
+
+| 窗口 | short_count 是 | smoothing 默认 | 效果 |
+|---|---|---|---|
+| 1h | 过去 1h 提及次数 | 2.0 | 短窗信号最尖锐，新热点 growth 直接拉满 |
+| 6h | 过去 6h 提及次数 | 5.0 | 中等敏感度 |
+| 24h | 过去 24h 提及次数 | 10.0 | 最稳健，宏观信号才能拉高 growth |
+
+举个例子，假设某 entity 三窗口的提及次数分别是 40 / 60 / 80 次（baseline ≈ 100 次），
+三窗口的 growth_rate 会自然衰减成 **20.0 → 12.0 → 8.0**——short_count 涨得没有
+窗口长度涨得快，所以**长窗的 growth 自然小一档**。这就是为什么 smoothing 要等比
+放大：让冷启动期不会出现"24h 窗口 growth 虚高 ×100"的奇怪现象。
+
+设计意图：**三窗口的 final_score 量纲一致**，可以直接拿来横向比较 "同一个 entity
+在哪个窗口最热"。
+
+### Q7.3 24h 榜为什么默认不屏蔽 BTC/ETH
+
+1h 榜默认黑名单含 BTC/ETH/SOL/BNB/USDT/USDC/DAI——因为它们在 1h 维度
+**永远在被讨论**，growth_rate ≈ 1.0，留在榜上只占位、还会模糊其它实体。
+
+但 24h 维度不一样：
+
+- BTC 平时一天 baseline ~50 次/h，**真有大新闻时 24h 提及总量飙到 2000+**，
+  growth_rate = 2000 / 50 / 24 ≈ 1.7（24h 平均后），但单看绝对量就翻了 5~10 倍
+- 这是宏观叙事信号——"BTC 突破历史新高"、"美联储议息影响 BTC"，应该被 surface
+
+所以 24h 默认黑名单**只屏蔽稳定币**：
+
+```python
+hotness_24h_exclude_entities = ("USDT", "USDC", "DAI")
+```
+
+如果你看着觉得吵（BTC/ETH 天天在 24h 榜首），加回去重启即可：
+
+```python
+hotness_24h_exclude_entities = ("USDT","USDC","DAI", "BTC","ETH","SOL","BNB")
+```
+
+### Q7.4 24h 冷启动期 8~12 小时空榜，为什么可以接受
+
+24h 榜的基线公式是 `baseline_total / (baseline_days*24 - short_hours)`，
+默认 `baseline_days=8` 时基线期是过去 8 天。新部署服务时 `entity_mentions` 表
+要先攒够 500 条才出榜（`hotness_24h_min_baseline_count=500` 保护）。
+
+按你当前流量（每天产生 2000~5000 条 entity_mentions），**8~12 小时**就能攒够
+500 条。这段时间日志会看到：
+
+```
+hotness skipped: baseline data insufficient (count=400 < 500)
+```
+
+是正常行为不是 bug。等数据够自然出榜。
+
+为啥不把门槛降到 100（让首日就有榜）？因为基线样本太少时 growth_rate 全是噪音——
+某 entity 平时一天 1 次，今天 5 次就被算成 5× growth，但那可能只是随机波动。
+500 条门槛保证榜单出来时**信号置信度足够**。
+
+如果你确定要看首日的"半成品 24h 榜"，临时把 `hotness_24h_min_baseline_count`
+改成 100 重启即可。
+
+### Q7.5 为什么不每窗口都跑独立的告警通道
+
+本任务**只铺多窗口榜单**，告警仍然只读 1h 榜。这是有意的：
+
+- 1h 告警通道是 Phase 2.2 已上线的成熟链路，不动它降低风险
+- 6h / 24h 是新维度，需要观察 1~2 周才知道"6h growth_rate 多少算异常""24h 应该
+  alert 在什么阈值"——这些经验得有数据才能调
+- 未来 Phase 2.2.1 真要加多通道告警时，AlertTriggerService 加个 `window_type`
+  参数 + 起 3 个实例就行，本任务已经把 hotness_snapshots 表准备好了
+
+所以**现阶段最佳实践**：
+
+- 用 `scripts/check_status.py` 或 SQL 看 6h/24h 榜，每周扫一两次
+- 1h 告警继续负责"瞬间冒头"的实时推送
+- 等观察出 6h/24h 的有效阈值再考虑接告警
+
+### Q7.6 三窗口同时上榜 = 强信号
+
+最有意思的副产品：某 entity 在三个窗口**同时**进 Top-10 时，意味着它"既是
+即时热点、又是中期趋势、还是全天主线"——这是非常强的信号。SQL 一条就能查：
+
+```sql
+WITH latest AS (
+  SELECT window_type, MAX(window_end) AS window_end
+  FROM hotness_snapshots
+  GROUP BY window_type
+)
+SELECT entity, ARRAY_AGG(window_type ORDER BY window_type) AS hits
+FROM hotness_snapshots h
+JOIN latest l USING (window_type, window_end)
+WHERE h.rank <= 10
+GROUP BY entity
+HAVING COUNT(DISTINCT window_type) = 3;
+```
+
+返回的 entity 就是三窗口共振信号，比任何单窗口的 Top-1 都更值得关注。这是
+Phase 2.2.2 想做"共振告警"的基础，本任务先把数据铺好。
+
+### Q7.7 一句话结论
+
+**1h 是闪电、6h 是涟漪、24h 是潮水**——三个时间尺度看到的是同一份数据的不同
+层次。多窗口让系统从"只能看到突发热点"升级到"能看到信号在不同时间维度上的
+形态"。工程代价几乎为零（DB 廉价 + CPU 多 5%），但产品维度直接 ×3。
 

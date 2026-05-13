@@ -604,3 +604,78 @@ def test_send_failure_does_not_update_alert_record(
     # 第二条消息仍是 [首次]（因为第一次失败没记录）
     second_text = failing_client.send_text.call_args_list[1].args[0]
     assert "[首次]" in second_text
+
+
+# ===========================================================================
+# Phase 2.1 多窗口扩展：向前兼容回归（Task 3）
+# ---------------------------------------------------------------------------
+# AlertTriggerService 显式 fetch_latest_window_end(session, "1h")，新窗口
+# （6h / 24h）的 hotness_snapshots 写入对它**完全透明**。这个用例同时种 3
+# 份榜，断言只对 1h 榜里的实体调 send_text。
+# ===========================================================================
+
+
+def test_alert_trigger_ignores_6h_24h_records(
+    sqlite_db, hotness_repo, monkeypatch
+) -> None:
+    """
+    Phase 2.1 Req 6.3：1h+6h+24h 三份榜共存时，AlertTriggerService 只读 1h。
+
+    场景：
+    - 1h 榜种 BTC growth=25（满足三道门槛，应触发 [首次] 告警）
+    - 6h 榜种 ETH growth=999（极高 growth，但 window_type='6h' 应被忽略）
+    - 24h 榜种 SOL growth=999（同上）
+    """
+    window_end = datetime(2026, 5, 14, 10, 0, 0)
+
+    # 同一 window_end 写 3 种 window_type
+    with sqlite_db.get_session() as s:
+        hotness_repo.upsert_batch(
+            s,
+            window_end=window_end,
+            window_type="1h",
+            records=[
+                _make_record(
+                    "BTC", growth_rate=25.0, count_short=10, cross_source=2
+                )
+            ],
+        )
+        hotness_repo.upsert_batch(
+            s,
+            window_end=window_end,
+            window_type="6h",
+            records=[
+                _make_record(
+                    "ETH", growth_rate=999.0, count_short=200, cross_source=3
+                )
+            ],
+        )
+        hotness_repo.upsert_batch(
+            s,
+            window_end=window_end,
+            window_type="24h",
+            records=[
+                _make_record(
+                    "SOL", growth_rate=999.0, count_short=500, cross_source=3
+                )
+            ],
+        )
+        s.commit()
+
+    _patch_now(monkeypatch, datetime(2026, 5, 14, 10, 5, 0, tzinfo=timezone.utc))
+
+    svc = _make_service(sqlite_db, hotness_repo)
+    assert svc.run_once() is True
+
+    # 关键断言：只对 BTC 调一次 send_text，不应对 ETH/SOL 触发
+    assert svc.telegram_client.send_text.call_count == 1, (
+        f"应只对 1h 榜里的 BTC 触发，实际调用 {svc.telegram_client.send_text.call_count} 次"
+    )
+    text = svc.telegram_client.send_text.call_args.args[0]
+    assert "BTC" in text
+    assert "ETH" not in text and "SOL" not in text
+
+    # 6h/24h 实体不应进入 _alert_records 冷却
+    assert "BTC" in svc._alert_records
+    assert "ETH" not in svc._alert_records
+    assert "SOL" not in svc._alert_records

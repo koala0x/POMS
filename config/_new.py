@@ -95,3 +95,67 @@ class NewPipelineSettings:
     # 在 [warn, max] 区间算"慢速成功"（情况 B WARN 日志）
     # 单测可注入小值（如 0.1）来验证情况 A/B 分支
     sliding_counter_backfill_warn_seconds: int = 120
+
+    # ==========================================================================
+    # L2 Hotness · 6h 中期窗口（Phase 2.1 多窗口热度排行榜，新增）
+    # --------------------------------------------------------------------------
+    # 6h 窗口给"半天级中期趋势"做信号源——比 1h 噪音小、比 24h 响应快。
+    # 默认与 1h 同款黑名单（屏蔽 BTC/ETH/USDT 等常驻巨头）。
+    # ==========================================================================
+
+    # 是否启用 6h 窗口实例。False → main.py 跳过该实例构造，零运行时开销
+    hotness_6h_enabled: bool = True
+
+    # Top-K 大小（与 1h 独立配置）
+    hotness_6h_top_k: int = 20
+
+    # growth_rate 分母平滑值
+    # 6h 窗口噪音比 1h 小（短窗时长 ×6），smoothing 等比放大避免冷启动 growth 虚高
+    hotness_6h_smoothing: float = 5.0
+
+    # 基线窗长度（天）。6h 默认沿用 7 天（baseline_hours = 7*24-6 = 162 > 0 OK）
+    hotness_6h_baseline_days: int = 7
+
+    # 基线样本充足性门槛
+    # 6h 窗口在 7 天 baseline 中需要的样本量约为 1h 的 2 倍（短窗变长 6 倍，
+    # 但 baseline 时长基本不变，所需 baseline 样本主要看 baseline 期长度）
+    hotness_6h_min_baseline_count: int = 200
+
+    # 6h 黑名单（默认与 1h 相同；可独立调整）
+    hotness_6h_exclude_entities: tuple[str, ...] = (
+        "BTC", "ETH", "SOL", "BNB",
+        "USDT", "USDC", "DAI",
+    )
+
+    # ==========================================================================
+    # L2 Hotness · 24h 长期窗口（Phase 2.1 多窗口热度排行榜，新增)
+    # --------------------------------------------------------------------------
+    # 24h 窗口给"全天级宏观信号"做信号源——BTC 破新高 / 跌破支撑这种宏观事件
+    # 在 1h 维度看不出来（BTC 永远在被聊），但 24h 维度的提及量翻 5~10 倍是真信号。
+    # 默认黑名单**只屏蔽稳定币**，保留 BTC/ETH 进榜。
+    # ==========================================================================
+
+    # 是否启用 24h 窗口实例
+    hotness_24h_enabled: bool = True
+
+    # Top-K 大小
+    hotness_24h_top_k: int = 20
+
+    # 24h 窗口的 smoothing：信号最稳定，分母平滑值最大，避免冷启动期 growth 爆炸
+    hotness_24h_smoothing: float = 10.0
+
+    # ★ 重要边界：必须 ≥ 8（baseline_days*24 - short_hours > 0）
+    # baseline_days=8 时基线小时数 = 8*24-24 = 168 = 7 天纯基线
+    # 与 1h 窗口的"7 天基线"语义对齐
+    # 设小于 8 → HotnessService.__post_init__ raise ValueError，main.py 兜底降级
+    hotness_24h_baseline_days: int = 8
+
+    # 基线样本充足性门槛（更长窗口需要更多样本才稳定）
+    # 用户决策：接受冷启动期 24h 榜空 8~12 小时
+    hotness_24h_min_baseline_count: int = 500
+
+    # 24h 黑名单：默认**不屏蔽** BTC/ETH/SOL/BNB——24h 维度它们的 growth 突变是真信号
+    # 仅屏蔽稳定币（USDT/USDC/DAI 在任何窗口都不该上榜）
+    hotness_24h_exclude_entities: tuple[str, ...] = (
+        "USDT", "USDC", "DAI",
+    )

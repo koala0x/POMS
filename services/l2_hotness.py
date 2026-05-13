@@ -38,7 +38,7 @@ from loguru import logger
 from db.connection import Database
 from db.repositories.entity_mentions_repo import EntityMentionsRepo
 from db.repositories.hotness_snapshots_repo import HotnessSnapshotsRepo
-from services.l2_sliding_counter import SlidingCounter
+from services.l2_sliding_counter import WINDOWS_SECONDS, SlidingCounter
 
 
 def align_to_quarter(dt: datetime) -> datetime:
@@ -68,6 +68,13 @@ class HotnessService:
     hotness_repo: HotnessSnapshotsRepo
     sliding_counter: SlidingCounter
 
+    # 本实例对应的 hotness_snapshots.window_type 值。
+    # 同时也是 sliding_counter.count() 的 window 入参——故必须是 SlidingCounter
+    # 已知窗口名（'1h' / '6h' / '24h' / 也可 '15min' / '7d'，但业务只用前 3 个）。
+    # 默认 '1h' 保持 Phase 1 / Phase 2.2 行为 100% 等价（main.py 已显式传值，
+    # 老调用方即使不传也走原行为）。
+    window_type: str = "1h"
+
     top_k: int = 20
     smoothing: float = 2.0
     short_hours: int = 1
@@ -87,8 +94,49 @@ class HotnessService:
 
     # --- 运行时状态（mutable，所以 dataclass 不加 frozen）---
     _last_window_end: Optional[datetime] = None
-    # main.py 在 SlidingCounter backfill 后注入：True=可跑，False=本轮跳过
+    # main.py 在 SlidingCounter backfill 后注入：True=可跑,False=本轮跳过
     _counter_ready: bool = True
+
+    # -----------------------------------------------------------------
+    # 构造期校验（Phase 2.1 多窗口扩展）
+    # -----------------------------------------------------------------
+
+    def __post_init__(self) -> None:
+        """
+        构造期三道校验，任一失败即 raise ValueError，错误消息含违规字段名 +
+        实际值，便于 main.py 兜底日志定位（详见 design.md §6.1）。
+
+        校验 1：window_type 必须是 SlidingCounter 已知窗口名
+        校验 2：short_hours 必须与 window_type 隐含的小时数自洽
+                  （'1h'→1 / '6h'→6 / '24h'→24）
+        校验 3：baseline_hours = baseline_days*24 - short_hours 必须 > 0
+                  否则 baseline_per_hour 会除 0；24h 窗口最小合法 baseline_days=8
+        """
+        # 校验 1
+        if self.window_type not in WINDOWS_SECONDS:
+            raise ValueError(
+                f"HotnessService window_type={self.window_type!r} 不支持，"
+                f"合法值：{sorted(WINDOWS_SECONDS.keys())}"
+            )
+
+        # 校验 2
+        expected_hours = WINDOWS_SECONDS[self.window_type] // 3600
+        if self.short_hours != expected_hours:
+            raise ValueError(
+                f"HotnessService window_type={self.window_type} 隐含 "
+                f"short_hours={expected_hours}，与传入的 "
+                f"short_hours={self.short_hours} 不一致"
+            )
+
+        # 校验 3：baseline 区间长度必须 > 0
+        baseline_hours = self.baseline_days * 24 - self.short_hours
+        if baseline_hours <= 0:
+            raise ValueError(
+                f"HotnessService(window_type={self.window_type}): "
+                f"baseline_days={self.baseline_days} * 24 "
+                f"({self.baseline_days * 24}) 必须 > "
+                f"short_hours={self.short_hours}，否则 baseline 期长度为 0"
+            )
 
     # -----------------------------------------------------------------
     # 公共 API
@@ -171,7 +219,7 @@ class HotnessService:
                     self.hotness_repo.upsert_batch(
                         session,
                         window_end=window_end,
-                        window_type="1h",
+                        window_type=self.window_type,
                         records=[{**r, "rank": i + 1} for i, r in enumerate(top)],
                     )
                     session.commit()
@@ -223,14 +271,19 @@ class HotnessService:
 
         短窗没有任何提及（count_short == 0）的 entity 直接跳过，不浪费 DB 查询。
         """
-        candidates = self.sliding_counter.active_entities("24h")
+        # 候选窗口选择（Phase 2.1 多窗口）：
+        # - 1h / 6h 实例：用 24h 窗口的活跃集合作候选（覆盖短窗 + 不会太大）
+        # - 24h 实例：必须用 7d 窗口的活跃集合（覆盖 24h 短窗 + 8 天基线，
+        #   且能涵盖"24h 前刚刚活跃过、卡边界被踢"的边缘 entity，更稳健）
+        candidate_window = "7d" if self.window_type == "24h" else "24h"
+        candidates = self.sliding_counter.active_entities(candidate_window)
         baseline_hours = self.baseline_days * 24 - self.short_hours
         short_start = window_end - timedelta(hours=self.short_hours)
         baseline_start = window_end - timedelta(days=self.baseline_days)
 
         records: list[dict] = []
         for entity in candidates:
-            short_count = self.sliding_counter.count(entity, "1h")
+            short_count = self.sliding_counter.count(entity, self.window_type)
             if short_count == 0:
                 continue
 
