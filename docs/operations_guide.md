@@ -323,13 +323,14 @@ EOF
 
 | 想干嘛 | 改哪个字段 | 说明 |
 |---|---|---|
+| 打开 / 关闭老链路 LLM 摘要 | `disable_legacy_pipeline: True` ↔ `False` | True=只跑新链路；False=老+新并行；关了老链路 Ollama 压根不会被初始化 |
 | 冷启动期想尽快看到排行榜 | `hotness_min_baseline_count: 100 → 20` | 降低"基线样本数"门槛；生产环境记得改回来 |
 | worker 空闲时醒得更频繁（调试用） | `poll_interval_seconds: 30 → 5` | 30s 太慢看不到效果；生产建议 30~60s |
 | SimHash 判重更激进 | `dedup_hamming_threshold: 3 → 5` | 数值越大越容易判成"重复"；上限 6 就差不多了 |
 | 热榜条数从 20 改成 50 | `hotness_top_k: 20 → 50` | |
 | 每轮归一化多扫点 | `normalizer_batch_size: 500 → 2000` | 积压大的时候加速消化；看 DB 能不能扛住 |
-| 换老链路 LLM 模型 | `ollama_model_level1: "qwen3:8b" → "qwen3:30b"` | 先确认 Ollama 端 `ollama pull qwen3:30b` 过了 |
-| 延长 LLM 超时 | `ollama_timeout_level1: 600 → 1200` | 上了大模型 CPU 慢就得加 |
+| 换老链路 LLM 模型 | `ollama_model_level1: "qwen3:8b" → "qwen3:30b"` | 先确认 Ollama 端 `ollama pull qwen3:30b` 过了；且 `disable_legacy_pipeline=False` 才生效 |
+| 延长 LLM 超时 | `ollama_timeout_level1: 600 → 1200` | 上了大模型 CPU 慢就得加；同样仅 `disable_legacy_pipeline=False` 时生效 |
 
 **注意**：改 DB 配置（`db_host` / `db_port` 等）后重启前先 `psql` 测一下新地址
 通不通，免得进程起来又挂。
