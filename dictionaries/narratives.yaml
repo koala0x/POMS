@@ -1,21 +1,114 @@
 # dictionaries/narratives.yaml
 #
-# 叙事词典。这是 Phase 1 之后（Phase 2/3）真正拉开差距的地方——
-# 能否早期捕获到"AI Agent"、"RWA"、"Restaking"这类新叙事，决定排行榜的 alpha 强度。
+# 叙事词典。Phase 2/3 拉开排行榜 alpha 的关键——能否早期捕获到
+# "AI Agent"、"RWA"、"Restaking" 这类新叙事，决定了榜单的信号强度。
 #
-# Phase 1 先留空。Gate 1 观测期间若发现高频叙事词没有被 $TICKER 或币名词典兜住，
-# 手动在这里补条目：
+# ============================================================================
+# 格式说明
+# ============================================================================
 #
-#   AI_Agent:
-#     type: narrative
-#     keywords: [AI agent, autonomous agent, agent protocol, ai16z]
-#   RWA:
-#     type: narrative
-#     keywords: [real world asset, tokenized, RWA]
+#   <标准名>:                       # 顶层 key，会作为 entity_mentions.entity 的值
+#     type:     <分类标签>          # 可选，Phase 1 不参与计算（存到 category 字段）
+#     keywords: [<词1>, <词2>, ...] # 关键词列表，推文里出现任一即命中
 #
-# 字段说明：
-#   - `keywords` 与 `aliases` 同义，加载器（dictionaries/loader.py）两者都认
-#   - narrative 类型的实体 substring match 是 case-insensitive
+# 匹配规则：
+#   - substring match + case-insensitive
+#     例如 keywords: [AI agent] 会命中 "AI agent"、"ai agent"、"AI Agent"
+#   - 顶层 key 本身也会自动加进 keywords（小写化）
+#     例如 AI_Agent 这个标准名，推文里写 "ai_agent" 也会命中
+#   - 关键词必须 ≥3 字符且语境清晰，避免误伤
+#     反例：keywords: [AI] → 把"AI 哥"、"all in"全打中，污染热榜
+#     正例：keywords: [AI agent, AI x crypto]
 #
-# 允许内容为空（服务启动时产生 WARN 日志，不阻止启动）。
-{}
+# 命名约束：
+#   - 顶层 key 推荐大写 + 下划线（AI_Agent / RWA），方便后续 SQL 查询
+#   - 跨文件不可同名：tickers.yaml 已有 BTC，这里就不能再写 BTC
+#   - 不同 narrative 的 keywords 不能重复：A 和 B 都用 "agent" 会启动报错
+#
+# 调试方法（修改后启动前先验证）：
+#   .venv/bin/python -c "
+#   from dictionaries import get_dictionaries
+#   get_dictionaries.cache_clear()
+#   d = get_dictionaries()
+#   for name, entry in d.narratives.items():
+#       print(name, entry.aliases)
+#   "
+#
+# 维护节奏建议：
+#   - 起步 5~10 个就够，先观察实际命中效果
+#   - 每周看一次 entity_mentions 里 entity_type='narrative' 的命中分布
+#   - 命中过低 → 关键词不够；命中过高 → 关键词太宽泛
+#   - 少而准 > 多而泛，不要一次性填 50 个
+# ============================================================================
+
+
+# ===== AI 类 =====
+
+AI_Agent:
+  type: ai
+  keywords: [AI agent, autonomous agent, agent protocol, agentic, ai16z, virtuals]
+
+AI_Crypto:
+  type: ai
+  keywords: [AI x crypto, decentralized AI, AI infra, GPU network, AI compute]
+
+
+# ===== RWA / 现实资产代币化 =====
+
+RWA:
+  type: defi
+  keywords: [real world asset, real-world asset, tokenized asset, tokenized treasury]
+
+
+# ===== Restaking / 再质押 =====
+
+Restaking:
+  type: defi
+  keywords: [restaking, eigenlayer, eigen layer, LRT, liquid restaking]
+
+
+# ===== Memecoin 季节性热度 =====
+
+Memecoin_Season:
+  type: meme
+  keywords: [memecoin season, meme 季, 土狗季, pump.fun, pumpfun, meme币]
+
+
+# ===== DePIN（去中心化物理基础设施） =====
+
+DePIN:
+  type: infra
+  keywords: [DePIN, decentralized physical infrastructure, helium network, render network]
+
+
+# ===== GameFi =====
+
+GameFi:
+  type: gaming
+  keywords: [gamefi, play to earn, play-to-earn, P2E, web3 gaming, 链游]
+
+
+# ===== Bitcoin 生态（不与 BTC ticker 冲突，所以叫 BTC_Ecosystem） =====
+
+BTC_Ecosystem:
+  type: btc
+  keywords: [bitcoin layer 2, BTC L2, runes, stacks, babylon, ordinals]
+
+
+# ===== 模块化区块链 / 数据可用性 =====
+
+Modular:
+  type: infra
+  keywords: [modular blockchain, data availability, celestia, eigenDA]
+
+
+# ===== 预测市场 =====
+
+Prediction_Market:
+  type: defi
+  keywords: [prediction market, polymarket, kalshi]
+
+# ===== 预测市场 =====
+稳定币:
+  type: stablecoin
+  keywords: [稳定币, CRCL, Circle, ARC, Visa, PayPal, stripe]
