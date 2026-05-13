@@ -1,18 +1,154 @@
 # dictionaries/chains.yaml
 #
-# 区块链/网络词典。
-# Phase 1 先留空骨架，等 Gate 1 观测到高频链名再逐步补充
-# （比如 "Base L2" / "Solana 生态" / "Monad 测试网" 这类整句式提及）。
+# 区块链 / 网络词典。
 #
-# Schema：
-#   <CHAIN_NAME>:
-#     type:    chain           # 固定为 chain，可省略
-#     aliases: [Base L2, ...]  # 可选
+# ============================================================================
+# 设计原则（很重要，没看完别填）
+# ============================================================================
 #
-# 注意：代币名（如 ETH / SOL / BNB）已在 tickers.yaml 里，
-# 本文件只放"显式把它当作一条链/网络引用"的情况，例如：
-#   Base: 从代币 BASE 的角度是 L2，从链角度是 Coinbase 的 L2 网络
-#   但 Phase 1 只用 tickers.yaml 里的 BASE（type=layer2），这里暂不重复
+# 1. 这里识别的是"用户在讨论某条公链/网络本身"，而不是讨论它的代币。
+#    例：
+#      "BNB 涨了 2%"          → 讨论代币 → 归 BNB (ticker)
+#      "BNB 链上 TVL 创新高"   → 讨论生态 → 归 BNB_Chain (chain)
+#      "Solana 生态项目爆发"   → 讨论生态 → 归 Solana (chain)
 #
-# 允许内容为空（服务启动时产生 WARN 日志，不阻止启动）。
-{}
+# 2. 关键约束：tickers.yaml 已有的 alias 不能在这里重复
+#    例如 tickers.yaml 里 BASE 是 layer2 type 的 ticker，
+#    所以这里**不能**再写顶层 key 为 `Base:` 也不能在 keywords 里裸写 `Base`，
+#    否则启动报错"别名冲突"。
+#
+# 3. 解决方案：
+#    a) 顶层 key 用带后缀的明确名字，避开和 ticker 冲突
+#       例：BNB_Chain（而不是 BNB）、Base_Chain（而不是 Base）
+#    b) keywords 必须带"链/生态/网络/L2"等限定语境
+#       例：keywords: [BNB Chain, BNB 链] —— 不能单写 BNB
+#       例：keywords: [Base L2, Base 链, Base 生态] —— 不能单写 Base
+#
+# 4. Solana 是个特例：tickers.yaml 里 SOL 没把 "Solana" 作为 alias，
+#    所以 chains.yaml 可以直接写顶层 key 为 `Solana:`，但 keywords 里
+#    单写 "Solana" 也不会冲突（因为 ticker 那边没占用 Solana 这个名字）。
+#    保险起见，建议加上"Solana 生态"、"SOL 生态"这种语境化关键词。
+#
+# 维护建议：
+# - 先填 3~5 条最高频的（BNB Chain、Solana、Base、Sui 等），观察一周
+# - 看 entity_mentions 里 entity_type='chain' 的命中分布
+# - 命中过低 → keyword 不够丰富；命中过高 → 关键词太宽泛
+# ============================================================================
+
+
+# ===== Solana 生态 =====
+# tickers.yaml 里 SOL 没有 "Solana" alias，所以这里 Solana 不会冲突
+Solana:
+  type: chain
+  aliases:
+    - Solana 生态
+    - Solana ecosystem
+    - SOL 生态
+    - SOL 链上
+
+
+# ===== BNB Chain（注意顶层 key 不能叫 BNB，会和 ticker 冲突）=====
+BNB_Chain:
+  type: chain
+  aliases:
+    - BNB Chain
+    - BNB 链
+    - BNB 链上
+    - BSC                       # Binance Smart Chain 旧称，仍在用
+    - 币安智能链
+    - 币安链
+
+
+# ===== Base L2（顶层 key 不能叫 Base，会和 ticker BASE 冲突）=====
+Base_Chain:
+  type: chain
+  aliases:
+    - Base L2
+    - Base 链
+    - Base 生态
+    - Base ecosystem
+    - Coinbase L2
+
+
+# ===== Ethereum 主网作为生态讨论 =====
+# tickers.yaml 已有 ETH，这里不能用 ETH，但 "以太坊主网"、"ETH L1" 不冲突
+Ethereum_Chain:
+  type: chain
+  aliases:
+    - 以太坊主网
+    - ETH L1
+    - Ethereum mainnet
+    - 以太坊生态
+    - ETH 生态
+
+
+# ===== Bitcoin 网络作为生态讨论 =====
+# tickers.yaml 已有 BTC，这里 "比特币网络"、"BTC L1" 不冲突
+Bitcoin_Network:
+  type: chain
+  aliases:
+    - 比特币网络
+    - BTC 网络
+    - BTC L1
+    - Bitcoin network
+
+
+# ===== Arbitrum =====
+# tickers.yaml 里 ARB 是 layer2 ticker，alias 没占 "Arbitrum" 这个名字
+# 所以可以直接写 Arbitrum 顶层 key（不冲突）
+Arbitrum:
+  type: chain
+  aliases:
+    - Arbitrum 链
+    - Arbitrum 生态
+    - Arb 链上
+
+
+# ===== Optimism =====
+# tickers.yaml 里 OP 是 layer2 ticker，alias 没占 "Optimism" 这个名字
+Optimism:
+  type: chain
+  aliases:
+    - Optimism 链
+    - Optimism 生态
+    - OP 链上
+    - OP Stack
+
+
+# ===== Sui =====
+# tickers.yaml 里 SUI 是 layer1 ticker；这里加"Sui 生态"语境
+Sui_Chain:
+  type: chain
+  aliases:
+    - Sui 链
+    - Sui 生态
+    - Sui ecosystem
+    - Sui 链上
+
+
+# ===== TON =====
+# tickers.yaml 里 TON 是 layer1 ticker
+TON_Chain:
+  type: chain
+  aliases:
+    - TON 链
+    - TON 生态
+    - TON ecosystem
+    - Telegram Open Network
+
+
+# ===== 新兴公链（暂未发币 / 流量观察期）=====
+
+Monad:
+  type: chain
+  aliases:
+    - Monad 测试网
+    - Monad chain
+    - Monad ecosystem
+
+Berachain:
+  type: chain
+  aliases:
+    - Bera 链
+    - Berachain ecosystem
+    - Bera 生态

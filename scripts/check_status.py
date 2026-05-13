@@ -63,8 +63,52 @@ def main() -> None:
             last_update = last_update or "(空表)"
             print(f"{tbl:30s} {total:>10s}  {last_update}")
 
-    # -------- 2. 最近 1 小时实体提及 Top 20 --------
-    _print_section("2. 最近 1 小时被提到最多的 Top 20 实体（entity_mentions）")
+    # -------- 2. 三源消息分布（上游抓取健康度） --------
+    _print_section("2. 三源消息分布（上游抓取健康度）")
+
+    with db.get_session() as s:
+        rows = s.execute(
+            text(
+                """
+                SELECT raw_source,
+                       count(*)                                                    AS total_24h,
+                       count(*) FILTER (WHERE ts > now() - INTERVAL '1 hour')      AS last_1h,
+                       count(*) FILTER (WHERE ts > now() - INTERVAL '10 minutes')  AS last_10min,
+                       max(ts)                                                     AS last_seen
+                FROM normalized_messages
+                WHERE ts >= now() - INTERVAL '24 hours'
+                GROUP BY raw_source
+                ORDER BY total_24h DESC
+                """
+            )
+        ).all()
+
+        if not rows:
+            print("(最近 24 小时无任何归一化消息——多半是上游抓取服务全停了)")
+        else:
+            # 计算 24h 总量做百分比
+            total_all = sum(r[1] for r in rows)
+            print(f"{'源':18s} {'24h':>8s} {'1h':>6s} {'10min':>7s} {'占比':>7s}  {'最近':25s}")
+            print("-" * 80)
+            for src, total, h1, m10, last_seen in rows:
+                pct = 100.0 * total / total_all if total_all else 0
+                print(
+                    f"{src:18s} {total:>8d} {h1:>6d} {m10:>7d} {pct:>6.1f}%  {str(last_seen):25s}"
+                )
+            # 检测掉队的源：哪个源 24h 占比 < 5% → 提醒
+            print()
+            laggards = [r for r in rows if r[1] / total_all < 0.05]
+            if laggards:
+                print("⚠️ 占比 < 5% 的源（很可能上游抓取服务慢/停了）：")
+                for src, total, _, _, _ in laggards:
+                    print(f"   - {src}: 仅 {total} 条 / 24h")
+            elif len(rows) < 3:
+                missing = {"twitter", "binance_square", "discord"} - {r[0] for r in rows}
+                if missing:
+                    print(f"⚠️ 完全无数据的源（24h 内 0 条）：{', '.join(sorted(missing))}")
+
+    # -------- 3. 最近 1 小时实体提及 Top 20 --------
+    _print_section("3. 最近 1 小时被提到最多的 Top 20 实体（entity_mentions）")
 
     with db.get_session() as s:
         rows = s.execute(
@@ -87,8 +131,8 @@ def main() -> None:
             for i, (entity, etype, cnt) in enumerate(rows, 1):
                 print(f"{i:>3d}  {entity:30s} {etype or '':12s} {cnt:>6d}")
 
-    # -------- 3. 最近 24 小时实体提及 Top 20（看更长时段累计热度） --------
-    _print_section("3. 最近 24 小时被提到最多的 Top 20 实体（entity_mentions）")
+    # -------- 4. 最近 24 小时实体提及 Top 20（看更长时段累计热度） --------
+    _print_section("4. 最近 24 小时被提到最多的 Top 20 实体（entity_mentions）")
 
     with db.get_session() as s:
         rows = s.execute(
@@ -111,8 +155,8 @@ def main() -> None:
             for i, (entity, etype, cnt) in enumerate(rows, 1):
                 print(f"{i:>3d}  {entity:30s} {etype or '':12s} {cnt:>6d}")
 
-    # -------- 4. 最新一份排行榜 --------
-    _print_section("4. 最新一份排行榜（hotness_snapshots）")
+    # -------- 5. 最新一份排行榜 --------
+    _print_section("5. 最新一份排行榜（hotness_snapshots）")
 
     with db.get_session() as s:
         # 先看最近一次窗口的时间

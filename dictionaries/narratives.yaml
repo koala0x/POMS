@@ -108,7 +108,13 @@ Prediction_Market:
   type: defi
   keywords: [ prediction market, polymarket, kalshi ]
 
-# ===== 预测市场 =====
+# ===== 稳定币 =====
 Stablecoin:
   type: stablecoin
-  keywords: [ 稳定币, stablecoin, stable coin, 稳定币赛道, 稳定币市场, 稳定币储备, CRCL, Circle, ARC, Visa USDC, PayPal USDC, stripe USDC, Circle reserve ]
+  keywords: [ stablecoin, stable coin, 稳定币赛道, 稳定币市场, 稳定币储备, Visa USDC, PayPal USDC]
+
+# ===== CRCL公司 =====
+CRCL:
+  type: stablecoin
+  keywords: [ CRCL, Circle, ARC ,Circle reserve]
+
