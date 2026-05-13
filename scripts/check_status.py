@@ -232,6 +232,62 @@ def main() -> None:
                     f"{r[6]:>4d} {float(r[7]):>7.2f} {is_new_mark:>3s}"
                 )
 
+    # -------- 6. 过去 24 小时持续热点（汇总 96 份榜单）--------
+    _print_section("6. 过去 24 小时持续热点（汇总 24h 内所有榜单）")
+
+    with db.get_session() as s:
+        # 思路：过去 24h 内每个 entity 在多少份榜单里上过榜（appearances），
+        # 平均排名多少（avg_rank），最高排名（best_rank），平均增长倍数（avg_growth），
+        # 平均总分（avg_score）。按 appearances DESC + avg_score DESC 排序，
+        # 既能看到"持续上榜"的常驻热点，也能看到突发但分数高的爆款
+        rows = s.execute(
+            text(
+                """
+                SELECT
+                  entity,
+                  entity_type,
+                  count(*)                                    AS appearances,
+                  round(avg(rank), 1)                         AS avg_rank,
+                  min(rank)                                   AS best_rank,
+                  round(avg(cast(growth_rate AS numeric)), 2) AS avg_growth,
+                  round(avg(cast(final_score AS numeric)), 2) AS avg_score,
+                  bool_or(is_new_entity)                      AS ever_new
+                FROM hotness_snapshots
+                WHERE window_end >= now() - INTERVAL '24 hours'
+                  AND window_type = '1h'
+                GROUP BY entity, entity_type
+                ORDER BY appearances DESC, avg_score DESC
+                LIMIT 25
+                """
+            )
+        ).all()
+
+        if not rows:
+            print("(过去 24 小时无任何排行榜产出，看第 5 节的诊断提示)")
+        else:
+            # 头两个列同步看："持续度（多少份榜单出现过 / 24h 内总共 96 份）"
+            # 让你一眼看出"持续型热点 vs 突发型热点"
+            print(
+                f"{'#':>3s}  {'实体':22s} {'类型':10s} "
+                f"{'上榜':>5s} {'平均名次':>9s} {'最高名次':>9s} "
+                f"{'平均增长':>9s} {'平均分':>8s} {'新':>3s}"
+            )
+            print("-" * 95)
+            for i, r in enumerate(rows, 1):
+                ever_new_mark = "★" if r[7] else ""
+                print(
+                    f"{i:>3d}  {r[0]:22s} {r[1] or '':10s} "
+                    f"{r[2]:>5d} {float(r[3]):>9.1f} {r[4]:>9d} "
+                    f"{float(r[5]):>9.2f} {float(r[6]):>8.2f} {ever_new_mark:>3s}"
+                )
+            print()
+            print(
+                "解读：\n"
+                "  - 上榜次数高 + 平均名次靠前 → 持续型热点（通常是常驻巨头）\n"
+                "  - 上榜次数少 + 最高名次靠前 → 突发型热点（短暂爆发但很猛，关注是否昙花一现）\n"
+                "  - ★ 标记表示该实体曾在某份榜单中被判为'新冒头'（baseline=0 + short>=5）"
+            )
+
     print()
     print("=" * 70)
     print(" 提示")
