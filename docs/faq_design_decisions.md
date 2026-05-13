@@ -12,6 +12,8 @@
 
 1. [Q1：为什么让两条链路都跑，不能只跑新链路吗？](#q1)
 2. [Q2：tickers.yaml 里这些币 / 股票要是都不是当下的热点怎么办？](#q2)
+3. [Q3：程序跑起来后，我在哪儿看跑出来的数据？](#q3)
+4. [Q4：narratives 和 tickers 怎么区分？我不知道某个名字该归到哪里](#q4)
 
 ---
 
@@ -272,3 +274,346 @@ GROUP BY confidence;
 
 所以现阶段别陷在"词典写不全"的焦虑里。**先跑，再观察，再填**，这是更健康
 的节奏。
+
+
+---
+
+## <a id="q3"></a>Q3：程序跑起来后，我在哪儿看跑出来的数据？
+
+**短答**：三个地方——**实时日志**（看在干活）、**数据库 3 张新表**（看具体数据）、
+**`scripts/check_status.py` 一键自检脚本**（看整体状态）。
+
+新链路所有"产出"都进 PostgreSQL，没有 UI 没有 Web 接口，全靠 SQL 或脚本看。
+
+### 三个查看入口
+
+#### 入口 1：实时日志（看系统是否在干活）
+
+```bash
+tail -f logs/service.log
+```
+
+每 30 秒会循环打出三行 INFO（对应新链路的三个环节）：
+
+```
+normalizer 本轮：扫描 X 条（tw=N bn=N dc=N）→ 写入 Y 条（重复 Z 条）
+entity_extractor 本轮：处理 X 条消息 → 产出 Y 条实体提及
+hotness window_end=2026-05-13 15:15:00 top_k=20 elapsed=0.5s
+```
+
+注意 `hotness window_end` 这行**只在每 15 分钟整点出现**（`:00 / :15 / :30 / :45`），
+其他时间不出榜，是设计行为不是 bug。
+
+退出 `tail -f` 用 Ctrl+C。
+
+#### 入口 2：数据库（看具体数据）
+
+新链路写 3 张表（其他 5 张是老链路 + 原始数据）：
+
+| 表 | 内容 | 看点 |
+|---|---|---|
+| `normalized_messages` | 三源消息归一化 + SimHash 判重后的统一表 | 看系统消化了多少原始数据 |
+| `entity_mentions` | 从消息里抽出来的实体（`$BTC` / `RWA` / 合约地址）| 看哪些实体被讨论 |
+| `hotness_snapshots` | **最终产品** —— Top-20 排行榜，每 15 分钟一份 | 看现在谁最热 |
+
+**连数据库的方式**：用图形客户端（推荐 [DBeaver](https://dbeaver.io/download/) /
+TablePlus / Navicat），连接参数从 `config/settings.py` 抄：
+
+```
+Host:     192.168.1.219
+Port:     5432
+Database: all_new
+User:     all_new
+Password: 123qwe
+```
+
+**最常用的 3 条 SQL**：
+
+```sql
+-- 1. 看最新一份排行榜（你最想看的）
+SELECT
+  rank,
+  entity,
+  entity_type,
+  count_short                              AS "1h提及次数",
+  round(cast(count_baseline as numeric), 2) AS "基线时均",
+  round(cast(growth_rate as numeric), 2)   AS "增长倍数",
+  cross_source                             AS "跨源数",
+  round(cast(final_score as numeric), 2)   AS "总分",
+  is_new_entity                            AS "新冒头"
+FROM hotness_snapshots
+WHERE window_end = (
+  SELECT max(window_end) FROM hotness_snapshots WHERE window_type='1h'
+)
+  AND window_type = '1h'
+ORDER BY rank ASC;
+
+-- 2. 看最近 1 小时被提到最多的 Top 20 实体
+SELECT entity, entity_type, count(*) AS mentions
+FROM entity_mentions
+WHERE ts >= now() - INTERVAL '1 hour'
+GROUP BY entity, entity_type
+ORDER BY mentions DESC
+LIMIT 20;
+
+-- 3. 看三源原始表近期入库速率（判断上游抓取服务是否在跑）
+SELECT 'twitter' AS src,        max(created_at), count(*) FILTER (WHERE created_at > now() - INTERVAL '10 minutes') AS last_10min FROM twitter_posts
+UNION ALL
+SELECT 'binance_square',        max(created_at), count(*) FILTER (WHERE created_at > now() - INTERVAL '10 minutes') FROM binance_square_posts
+UNION ALL
+SELECT 'discord',               max(created_at), count(*) FILTER (WHERE created_at > now() - INTERVAL '10 minutes') FROM discord_messages;
+```
+
+#### 入口 3：一键自检脚本（最省事）
+
+```bash
+.venv/bin/python scripts/check_status.py
+```
+
+输出三段：
+
+1. **3 张表的总行数 + 最近更新时间** —— 一眼判断系统是否在干活
+2. **最近 1 小时实体提及 Top 20** —— 看实体抽取阶段产出
+3. **最新一份排行榜** —— 看最终产品
+
+不用记 SQL，开发调试时常用。
+
+### 排行榜各列含义（看不懂数字时回来对照）
+
+| 列 | 含义 | 怎么用 |
+|---|---|---|
+| `rank` | 名次 1~20 | 排序就靠这个 |
+| `entity` | 被讨论的对象（币符号 / 公链 / 合约地址 / 叙事名） | 这就是当前最热的话题 |
+| `count_short` | 过去 1 小时被提到次数 | 绝对热度，越高越火 |
+| `count_baseline` | 近 7 天每小时平均提及次数 | 当作"日常水位" |
+| `growth_rate` | `count_short / max(baseline_per_hour, 2.0)` | **越大越"突然热"**，是 Phase 1 的核心信号 |
+| `cross_source` | 在几个数据源出现过（1~3） | 越多说明"多平台共振"，更可信 |
+| `final_score` | `growth_rate × (1 + 0.3 × (cross_source - 1))` | 最终排序依据 |
+| `is_new_entity` | 基线 0 次、短窗 ≥5 次的"新冒头"实体 | True 时往往是新 meme / 新概念 |
+
+### 一份"健康榜单"和"稀薄榜单"的对比
+
+健康状态（数据流量充足时）：
+
+```
+rank  entity   count_short  growth  cross_source  score
+ 1    BTC          87         12.3        3          16.0   ← 跨源=3，多平台共振
+ 2    AI16Z        45          7.8        2           8.8
+ 3    RWA          32          5.1        2           5.7
+```
+
+稀薄状态（你 2026-05-13 15:15 那份榜单）：
+
+```
+rank  entity   count_short  growth  cross_source  score
+ 1    BTC           3         1.26        1          1.26   ← 跨源全是 1
+ 2    OP            2         1.00        1          1.00
+ 3    ETH           2         0.73        1          0.73
+```
+
+**`cross_source` 全是 1 是个强信号**：说明数据基本只来自一个源（多半是
+Twitter）。要么上游 Binance / Discord 抓取服务没启动，要么三源数据
+体量本身就不均衡。这不影响系统功能，但榜单质量会打折。
+
+### 排行榜不出来 / 数据稀薄时的排查路径
+
+#### 现象 A：`hotness_snapshots` 总行数 = 0
+
+最可能原因：
+
+1. **还没到第一个整点**：服务启动时不一定正好赶在 `:00 / :15 / :30 / :45`，
+   等到下一个整点才会出第一份。等就行
+2. **基线数据不足**：`grep "baseline data insufficient" logs/service.log`，
+   `entity_mentions` 累计不够 100 条会跳过。等数据攒够；想强行看，
+   改 `config/settings.py` 的 `hotness_min_baseline_count: 100 → 20`
+3. **SlidingCounter backfill 失败**：`grep "sliding-counter backfill" logs/service.log`，
+   看是不是 ERROR
+
+#### 现象 B：榜单出来了但 `count_short` 都是个位数 + `cross_source` 全是 1
+
+最可能原因：**上游抓取服务不在跑 / 速率很低**。先跑入口 2 的第 3 条 SQL
+看三源 `last_10min`：
+
+| 三源 last_10min 表现 | 含义 | 动作 |
+|---|---|---|
+| 全部 0 | 上游抓取服务都停了 | 找抓取服务那边重启 |
+| Twitter 几十条，Binance/Discord 都是 0 | 只 Twitter 在抓 | 找 Binance/Discord 抓取服务那边排查 |
+| 三源都有几十~几百条 | 上游正常 | 那就是词典识别率问题，跳到现象 C |
+
+#### 现象 C：消息进来了但 `entity_mentions` 不涨
+
+最可能原因：**词典 + 正则没识别到**。这是词典缺口，不是 bug。看哪些
+消息没被抽到实体：
+
+```sql
+SELECT nm.text
+FROM normalized_messages nm
+LEFT JOIN entity_mentions em ON em.msg_id = nm.id
+WHERE em.id IS NULL
+  AND nm.is_duplicate = FALSE
+  AND nm.l1_processed_at IS NOT NULL
+ORDER BY random()
+LIMIT 20;
+```
+
+人眼扫一遍：
+
+- 真噪音（"早安"、"睡了"）→ 漏过没问题
+- 应该被抓到但没抓（比如"ai agent 起飞了"）→ 词典缺口，去补 `dictionaries/narratives.yaml`
+
+详见 [Q2 场景 B/C](#q2)。
+
+### 一句话结论
+
+看数据 = **`scripts/check_status.py` 跑一遍**。看不懂某个列 → 回到本节
+"排行榜各列含义"对照表。榜单稀薄不代表系统坏 → 先用入口 2 的 SQL 3
+看上游数据流量。
+
+
+---
+
+## <a id="q4"></a>Q4：narratives 和 tickers 怎么区分？我不知道某个名字该归到哪里
+
+**短答**：
+
+- **ticker** = "**它**"（一个具体可交易的资产，有交易对）
+- **narrative** = "**一类东西**"（一个主题/赛道，下面有很多 ticker）
+
+记不住就**回想你跟朋友聊起这个东西时怎么说**：
+
+- "**$XXX 涨了 10%**" → ticker（带 `$`、有价格）
+- "**XXX 是下一个 narrative**" → narrative（不带 `$`、是趋势）
+- "**XXX 链上 TVL 很高**" → chain（讨论生态，归 `chains.yaml`）
+
+### 特征对比表
+
+| ticker 的特征 | narrative 的特征 |
+|---|---|
+| 在交易所能买卖、有 `$` 符号 | 没有交易对，是个抽象概念 |
+| 是一个**专有名词**（BTC、SOL）| 是一个**类别名/主题词**（DeFi、AI Agent）|
+| 单数：一只币 / 一支股票 | 复数：一群项目的集合 |
+| 用户讨论时常带 `$`：`$BTC 涨了` | 用户讨论时不带 `$`：`AI agent 是下一个风口` |
+| 跌了你能直接亏到钱 | "热"了你需要再选一个具体 ticker 才能买 |
+
+### 决策树（自己往下问）
+
+遇到一个名字，自己问自己：
+
+**Q1：交易所能买卖吗？能直接买的有 `$` 前缀吗？**
+- 是 → **ticker**（写到 `tickers.yaml`）
+- 否 → 继续下一题
+
+**Q2：它是一类项目的统称吗？说出这个名字时，能联想到至少 3~5 个具体 token？**
+- 是 → **narrative**（写到 `narratives.yaml`）
+- 否 → 继续下一题
+
+**Q3：它是一条公链吗？**
+- 是 → **chain**（写到 `chains.yaml`，独立分类）
+- 否 → 可能是 KOL / 项目方公司名 / 其他，按场景决定
+
+### 典型例子
+
+#### 100% ticker
+
+| 名字 | 理由 |
+|---|---|
+| BTC, ETH, SOL | 主流币，交易对就是它们本身 |
+| DOGE, PEPE, WIF | meme 币，能交易 |
+| AAPL, NVDA, TSLA | 美股 ticker |
+| USDT, USDC | 稳定币，能买能换 |
+| EIGEN, AAVE, UNI | 协议自己发的 token |
+
+#### 100% narrative
+
+| 名字 | 理由（联想到的 ticker） |
+|---|---|
+| **AI_Agent** | ai16z, virtuals, fartcoin, GAME by Virtuals |
+| **RWA** | ONDO, MKR, USDY, BUIDL |
+| **Restaking** | EIGEN, ETHFI, REZ |
+| **DePIN** | RNDR, HNT, IO, GRASS |
+| **GameFi** | AXS, IMX, SAND, RON |
+| **Memecoin_Season** | 一种市场状态（"meme 季来了"），不是某个具体的币 |
+| **Modular** | TIA, EIGENDA, AVAIL |
+
+#### 模糊地带（容易搞错的）
+
+| 名字 | 该归哪里 | 说明 |
+|---|---|---|
+| **EigenLayer** | tickers（EIGEN 别名） | 协议本身有 token EIGEN，所以"eigenlayer"应该是 EIGEN 的 alias。如果讨论 "eigenlayer 生态"通指整个赛道，归 Restaking narrative —— **重叠 OK，靠 keywords 上下文区分** |
+| **Bitcoin Layer 2** | narratives（BTC_Ecosystem） | 一类 L2 项目的统称（Stacks、Babylon、Runes 都算），不是单一 token |
+| **Solana** | chains | 它是一条公链，归 `chains.yaml`；该链上的代币是 SOL ticker |
+| **Layer 2** | narratives | 是一类公链的统称（ARB、OP、BASE 都是）。但讨论时通常说具体某条 L2，所以这个 narrative 实战价值不高，可不填 |
+| **DeFi** | narratives | 没问题，但词太宽泛，所有协议都算，会污染热榜。建议拆成 `Restaking` / `LSDfi` / `Perp_DEX` 这种更细的子叙事 |
+| **Trump** | tickers（TRUMP 是 meme 币） | 但如果讨论的是政治本身（关税、降息），那是**事件**，超出 Phase 1 范围 |
+| **MicroStrategy** | tickers（MSTR 别名） | MicroStrategy 是上市公司，对应 MSTR 股票，归 ticker。"机构买 BTC"这种是事件不是叙事 |
+
+### 重叠的处理：用 `keywords` 加上下文
+
+很多关键词会同时出现在 ticker 和 narrative 里，比如 "eigenlayer"。处理方式
+**不是"两边都放"或"哪边都不放"**——而是让 narrative 的 keywords 加更多上下文。
+
+**反例（启动会报"别名冲突"）**：
+
+```yaml
+# tickers.yaml
+EIGEN:
+  aliases: [eigenlayer, eigen]
+
+# narratives.yaml
+Restaking:
+  keywords: [eigenlayer]   # ← 启动 raise："别名冲突"
+```
+
+**正例（用上下文消歧）**：
+
+```yaml
+# tickers.yaml
+EIGEN:
+  aliases: [eigen]   # 不要单写 eigenlayer，让 narrative 用
+
+# narratives.yaml
+Restaking:
+  keywords: [restaking, eigenlayer ecosystem, LRT, liquid restaking]
+```
+
+或者反过来：
+
+```yaml
+# tickers.yaml
+EIGEN:
+  aliases: [eigen token, "$EIGEN"]
+
+# narratives.yaml
+Restaking:
+  keywords: [restaking, eigenlayer, LRT]
+```
+
+实际上**`$EIGEN` 这种带 `$` 写法系统会用正则自动抓**，所以 ticker 词典专心
+管"裸写"消歧即可。
+
+### 实操：让数据告诉你怎么填
+
+不要凭空想象去扩词典。让系统跑几天，用 SQL 查 narrative 命中分布：
+
+```sql
+SELECT entity, count(*) AS hits
+FROM entity_mentions
+WHERE entity_type = 'narrative'
+  AND ts >= now() - INTERVAL '24 hours'
+GROUP BY entity
+ORDER BY hits DESC;
+```
+
+观察结果：
+
+| 现象 | 含义 | 动作 |
+|---|---|---|
+| 某 narrative 命中数 = 0 | 关键词不准（用户实际不这么说） | 改这个 narrative 的 keywords |
+| 某 narrative 命中数 > 1000 | 关键词太宽泛 | 缩窄 keywords，避免污染 |
+| 某赛道你看着热闹但榜上没有 | 词典缺口 | 加新 narrative |
+
+### 一句话结论
+
+**短期不用纠结**。当前 `narratives.yaml` 模板里的 9 个已经覆盖主流分类。
+**让数据告诉你怎么填**，比凭空想象准得多。拿不准的名字先放一边别填，
+等观察出节奏后再扩。
