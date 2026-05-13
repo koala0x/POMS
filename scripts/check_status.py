@@ -87,8 +87,32 @@ def main() -> None:
             for i, (entity, etype, cnt) in enumerate(rows, 1):
                 print(f"{i:>3d}  {entity:30s} {etype or '':12s} {cnt:>6d}")
 
-    # -------- 3. 最新一份排行榜 --------
-    _print_section("3. 最新一份排行榜（hotness_snapshots）")
+    # -------- 3. 最近 24 小时实体提及 Top 20（看更长时段累计热度） --------
+    _print_section("3. 最近 24 小时被提到最多的 Top 20 实体（entity_mentions）")
+
+    with db.get_session() as s:
+        rows = s.execute(
+            text(
+                """
+                SELECT entity, entity_type, count(*) AS cnt
+                FROM entity_mentions
+                WHERE ts >= now() - INTERVAL '24 hours'
+                GROUP BY entity, entity_type
+                ORDER BY cnt DESC
+                LIMIT 20
+                """
+            )
+        ).all()
+        if not rows:
+            print("(最近 24 小时无任何实体被提及)")
+        else:
+            print(f"{'#':>3s}  {'实体':30s} {'类型':12s} {'次数':>6s}")
+            print("-" * 70)
+            for i, (entity, etype, cnt) in enumerate(rows, 1):
+                print(f"{i:>3d}  {entity:30s} {etype or '':12s} {cnt:>6d}")
+
+    # -------- 4. 最新一份排行榜 --------
+    _print_section("4. 最新一份排行榜（hotness_snapshots）")
 
     with db.get_session() as s:
         # 先看最近一次窗口的时间
@@ -110,7 +134,25 @@ def main() -> None:
                 "  - 或者还没到第一个 :00/:15/:30/:45 整点)"
             )
         else:
+            # 计算距现在多久前，给个直观的"几分钟前"说明
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc)
+            # latest 是带 tz 的 datetime（PG TIMESTAMPTZ）
+            delta = now - latest.astimezone(timezone.utc)
+            mins_ago = int(delta.total_seconds() // 60)
+
             print(f"窗口时刻: {latest}")
+            print(
+                f"  含义：截至 {latest.strftime('%H:%M')} 的"
+                f"过去 1 小时（{(latest.replace(microsecond=0)).strftime('%H:%M')} 之前 1 小时）热点"
+            )
+            print(f"  距现在: {mins_ago} 分钟前")
+            if mins_ago > 16:
+                print(
+                    "  ⚠️ 距今超过 15 分钟，说明已经错过了下一个整点产出，"
+                    "可能 worker 卡住或数据稀薄被跳过"
+                )
             print()
             rows = s.execute(
                 text(

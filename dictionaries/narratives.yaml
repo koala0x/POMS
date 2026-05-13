@@ -46,69 +46,69 @@
 
 AI_Agent:
   type: ai
-  keywords: [AI agent, autonomous agent, agent protocol, agentic, ai16z, virtuals]
+  keywords: [ AI agent, autonomous agent, agent protocol, agentic, ai16z, virtuals ]
 
 AI_Crypto:
   type: ai
-  keywords: [AI x crypto, decentralized AI, AI infra, GPU network, AI compute]
+  keywords: [ AI x crypto, decentralized AI, AI infra, GPU network, AI compute ]
 
 
 # ===== RWA / 现实资产代币化 =====
 
 RWA:
   type: defi
-  keywords: [real world asset, real-world asset, tokenized asset, tokenized treasury]
+  keywords: [ real world asset, real-world asset, tokenized asset, tokenized treasury ]
 
 
 # ===== Restaking / 再质押 =====
 
 Restaking:
   type: defi
-  keywords: [restaking, eigenlayer, eigen layer, LRT, liquid restaking]
+  keywords: [ restaking, eigenlayer, eigen layer, LRT, liquid restaking ]
 
 
 # ===== Memecoin 季节性热度 =====
 
 Memecoin_Season:
   type: meme
-  keywords: [memecoin season, meme 季, 土狗季, pump.fun, pumpfun, meme币]
+  keywords: [ memecoin season, meme 季, 土狗季, pump.fun, pumpfun, meme币 ]
 
 
 # ===== DePIN（去中心化物理基础设施） =====
 
 DePIN:
   type: infra
-  keywords: [DePIN, decentralized physical infrastructure, helium network, render network]
+  keywords: [ DePIN, decentralized physical infrastructure, helium network, render network ]
 
 
 # ===== GameFi =====
 
 GameFi:
   type: gaming
-  keywords: [gamefi, play to earn, play-to-earn, P2E, web3 gaming, 链游]
+  keywords: [ gamefi, play to earn, play-to-earn, P2E, web3 gaming, 链游 ]
 
 
 # ===== Bitcoin 生态（不与 BTC ticker 冲突，所以叫 BTC_Ecosystem） =====
 
 BTC_Ecosystem:
   type: btc
-  keywords: [bitcoin layer 2, BTC L2, runes, stacks, babylon, ordinals]
+  keywords: [ bitcoin layer 2, BTC L2, runes, stacks, babylon, ordinals ]
 
 
 # ===== 模块化区块链 / 数据可用性 =====
 
 Modular:
   type: infra
-  keywords: [modular blockchain, data availability, celestia, eigenDA]
+  keywords: [ modular blockchain, data availability, celestia, eigenDA ]
 
 
 # ===== 预测市场 =====
 
 Prediction_Market:
   type: defi
-  keywords: [prediction market, polymarket, kalshi]
+  keywords: [ prediction market, polymarket, kalshi ]
 
 # ===== 预测市场 =====
-稳定币:
+Stablecoin:
   type: stablecoin
-  keywords: [稳定币, CRCL, Circle, ARC, Visa, PayPal, stripe, USDC, USDT, DAI]
+  keywords: [ 稳定币, stablecoin, stable coin, 稳定币赛道, 稳定币市场, 稳定币储备, CRCL, Circle, ARC, Visa USDC, PayPal USDC, stripe USDC, Circle reserve ]
