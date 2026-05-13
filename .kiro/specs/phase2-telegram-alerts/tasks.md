@@ -113,30 +113,31 @@ _Requirements: Req 5_
 
 > 这一步需要真实的 Telegram Bot Token + chat_id，之前已经准备过。
 
-- [ ] **5.1 把真实 token + chat_id 填入 `config/_alerts.py`**
-- [ ] **5.2 临时把 threshold 调成 1.0**（让告警必定触发）
+- [x] **5.1 把真实 token + chat_id 填入 `config/_alerts.py`**
+- [x] **5.2 临时把 threshold 调成 1.0**（让告警必定触发）
   - `alert_growth_threshold: float = 1.0`
-- [ ] **5.3 用 restart.sh 重启**
+- [x] **5.3 用 restart.sh 重启**
   - `./scripts/restart.sh`
   - 启动日志含 "AlertTriggerService 启动：growth_threshold=1.0 cooldown=60min ..."
-- [ ] **5.4 等下一个整点（最多 15 分钟）**
+- [x] **5.4 等下一个整点（最多 15 分钟）**
   - 期望：Telegram 收到告警消息
   - 消息包含实体名 / 增长倍数 / 排名
-- [ ] **5.5 把 threshold 改回 20.0，重启**
+  - 实际：2026-05-14 01:48:12 收到 OP [首次] growth=1.5 告警
+- [x] **5.5 把 threshold 改回 20.0，重启**
   - 收到一次告警就够，回到正常配置避免刷屏
 
 _Requirements: Success Metrics 阶段验收_
 
 ## Task 6：文档更新
 
-- [ ] **6.1 更新 `docs/operations_guide.md` 加一节"Telegram 告警"**
+- [x] **6.1 更新 `docs/operations_guide.md` 加一节"Telegram 告警"**
   - 在第 6 节"改参数"附近加：如何调 threshold / cooldown
   - 在第 7 节"跑测试"附近加：如何验证告警生效
   - 启动日志样例追加 AlertTriggerService 那一行
-- [ ] **6.2 在 `docs/faq_design_decisions.md` 追加 Q6**
+- [x] **6.2 在 `docs/faq_design_decisions.md` 追加 Q6**
   - "为什么告警冷却 60 分钟而不持久化？"
   - "告警没收到怎么排查？"
-- [ ] **6.3 不改 README.md**（README 是 Phase 0 老链路文档，Phase 2 不动）
+- [x] **6.3 不改 README.md**（README 是 Phase 0 老链路文档，Phase 2 不动）
 
 ## 执行顺序与依赖图
 

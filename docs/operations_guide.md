@@ -68,12 +68,18 @@ cd /Users/ye/Work/Crypto/PomsAI
 老链路已关闭（settings.disable_legacy_pipeline=True）：跳过 Ollama 客户端与 Level1/Level2 Service 初始化
 词典就绪：tickers=57 chains=0 narratives=0 kols=0 aliases=64
 SlidingCounter backfill 结束：ok=True total=<N> elapsed=<X.X>s
-服务启动成功:worker 只跑新链路 (Phase 1 new services=3，空闲 sleep 30s)
+AlertTriggerService 启动：growth_threshold=20.0 cooldown=60min escalation×1.5 heartbeat=6h
+服务启动成功:worker 只跑新链路 (Phase 1 new services=4，空闲 sleep 30s)
 ```
 
 > 说明：`disable_legacy_pipeline` 默认 `True`，只跑新链路（Phase 1 热度排行榜）。
 > 想把老链路 LLM 摘要打开，改 `config/settings.py` 里 `disable_legacy_pipeline: bool = True` → `False`，
 > 然后重启服务。代码本身不用动。
+>
+> AlertTriggerService 是 Phase 2 新增的 Telegram 告警服务。`telegram_bot_token` /
+> `telegram_chat_id` 任一为空时不会出现这一行启动日志，会变成
+> `Telegram 告警未配置（token/chat_id 为空），已禁用`，告警系统整体跳过初始化，
+> hotness 主流程不受影响。详见 §6 "Telegram 告警调参"。
 
 后台跑：
 
@@ -331,9 +337,78 @@ EOF
 | 每轮归一化多扫点 | `normalizer_batch_size: 500 → 2000` | 积压大的时候加速消化；看 DB 能不能扛住 |
 | 换老链路 LLM 模型 | `ollama_model_level1: "qwen3:8b" → "qwen3:30b"` | 先确认 Ollama 端 `ollama pull qwen3:30b` 过了；且 `disable_legacy_pipeline=False` 才生效 |
 | 延长 LLM 超时 | `ollama_timeout_level1: 600 → 1200` | 上了大模型 CPU 慢就得加；同样仅 `disable_legacy_pipeline=False` 时生效 |
+| **关闭 Telegram 告警** | `telegram_bot_token: "" / telegram_chat_id: ""` | 任一为空整个告警服务不构造，hotness 主流程不变（详见下面 6.1 小节） |
+| **告警太频 / 太稀** | `alert_growth_threshold: 20.0 → 10.0 或 50.0` | 数字越大告警越稀。先观察 1 周再调（详见下面 6.1 小节） |
+| **告警冷却时长** | `alert_cooldown_minutes: 60 → 30` | 缩短同实体两次告警的最小间隔；常规情况下 60 分钟够用 |
+| **告警升级灵敏度** | `alert_escalation_growth_multiplier: 1.5 → 2.0` | 数字越大"升级告警"越难触发，越保守 |
+| **持续热点心跳间隔** | `alert_heartbeat_hours: 6 → 12` | 持续热点最长不告警时长；调长则"持续 Nh"提醒更稀 |
 
 **注意**：改 DB 配置（`db_host` / `db_port` 等）后重启前先 `psql` 测一下新地址
 通不通，免得进程起来又挂。
+
+### 6.1 Telegram 告警调参（Phase 2 新增）
+
+Telegram 告警的所有配置都在 `config/_alerts.py`（不在主 `settings.py`，是个分组）。
+关闭整个告警系统：把 `telegram_bot_token` 或 `telegram_chat_id` 改成空字符串，
+重启服务即可——AlertTriggerService 不会被构造，启动日志显示
+`Telegram 告警未配置（token/chat_id 为空），已禁用`。
+
+#### 调 threshold 的节奏
+
+部署后 24 小时内**不要急着调**。先按默认 20.0 跑一周，观察告警频率：
+
+| 现象 | 原因 | 动作 |
+|---|---|---|
+| 一周告警 ≥ 5 次 | 默认值合理 | 继续观察，不动 |
+| 一周告警 0 次 | threshold 太高 | 调成 10.0；或先 SQL 看 99% 分位 |
+| 一天告警 ≥ 10 次 | threshold 太低 | 调成 30.0~50.0；或调长 cooldown |
+
+用 SQL 看实际 growth_rate 分布，决定 threshold 设多少：
+
+```sql
+SELECT
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY growth_rate) AS p95,
+  percentile_cont(0.99) WITHIN GROUP (ORDER BY growth_rate) AS p99
+FROM hotness_snapshots
+WHERE window_end >= now() - INTERVAL '7 days';
+-- p99 大约就是"每天告警 1 次左右"的 threshold
+```
+
+#### 联调验证（确认链路可达）
+
+修改 token / chat_id 后，验证 Telegram 链路连通性最快的办法是临时把
+`alert_growth_threshold` 调成 1.0 + 重启 → 下一份榜出来时几乎所有实体都会
+触发告警，确认收到任意一条后立刻把 threshold 改回 20.0 + 再次重启。整个
+过程 < 30 分钟。
+
+也可以用纯 Python 一行验证（不重启服务）：
+
+```bash
+.venv/bin/python -c "
+from config.settings import get_settings
+from notifications.telegram_client import TelegramClient
+s = get_settings()
+client = TelegramClient(bot_token=s.telegram_bot_token, chat_id=s.telegram_chat_id)
+print('send result:', client.send_text('PomsAI 联调测试'))
+"
+```
+
+返回 `True` 说明 token/chat_id/网络全 OK。返回 `False` → 看日志里
+`telegram http error` / `telegram network error` 哪一种，对应排查（详见
+`docs/faq_design_decisions.md` Q6）。
+
+#### 看告警相关日志
+
+```bash
+# 是否真的发出过告警
+grep "alert sent" logs/service.log | tail -10
+
+# 哪些实体被冷却跳过
+grep "alert skipped" logs/service.log | tail -10
+
+# Telegram API 报错
+grep "telegram .*error" logs/service.log | tail -10
+```
 
 ---
 
@@ -348,8 +423,11 @@ EOF
 应看到：
 
 ```
-109 passed, 1 skipped in X.XXs
+128 passed, 1 skipped in X.XXs
 ```
+
+> 测试基线演进：Phase 1 109 → +3（黑名单）= 112 → Phase 2 +5（telegram_client）
+> +11（l2_alert_trigger）= **128 passed**。改了代码后 pass 数应只增不减。
 
 只跑某个模块的测试：
 
@@ -359,7 +437,31 @@ EOF
 
 # 只测某个具体用例
 .venv/bin/python -m pytest tests/test_l2_hotness.py::test_growth_rate_formula -v
+
+# 只测 Phase 2 Telegram 客户端
+.venv/bin/python -m pytest tests/test_telegram_client.py -v
+
+# 只测 Phase 2 告警触发服务
+.venv/bin/python -m pytest tests/test_l2_alert_trigger.py -v
 ```
+
+### 7.1 验证 Telegram 告警生效（不动主流程）
+
+改完告警相关参数想确认它真的生效，最快办法是看日志里 AlertTriggerService
+启动那一行的 threshold/cooldown 是不是新值：
+
+```bash
+grep "AlertTriggerService 启动" logs/service.log | tail -3
+```
+
+应该看到类似：
+
+```
+AlertTriggerService 启动：growth_threshold=20.0 cooldown=60min escalation×1.5 heartbeat=6h
+```
+
+如果 threshold 跟你刚改的不一致 → 进程没重启（`@lru_cache(maxsize=1)` 只在
+进程启动时读一次配置），跑 `./scripts/restart.sh --bg` 让 lru_cache 失效。
 
 ---
 

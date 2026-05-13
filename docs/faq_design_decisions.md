@@ -15,6 +15,7 @@
 3. [Q3：程序跑起来后，我在哪儿看跑出来的数据？](#q3)
 4. [Q4：narratives 和 tickers 怎么区分？我不知道某个名字该归到哪里](#q4)
 5. [Q5："热点"和"提到最多"有什么区别？](#q5)
+6. [Q6：Telegram 告警为什么冷却 60 分钟而不持久化？没收到告警怎么排查？](#q6)
 
 ---
 
@@ -768,3 +769,157 @@ final_score = growth_rate × (1 + 0.3 × (跨源数 - 1))
 **"提到最多"是体检表（看系统活没活）**，**"热点"是 alpha 表（看哪儿有机会）**。
 你打开脚本最该花时间的是**第 4 节排行榜的 `growth_rate` 列**，不是第 2 / 3 节
 的次数列。
+
+
+---
+
+## <a id="q6"></a>Q6：Telegram 告警为什么冷却 60 分钟而不持久化？没收到告警怎么排查？
+
+**短答**：
+
+- **冷却为什么 60 分钟而不持久化**：进程内 dict 实现冷却 = 0 复杂度；持久化到
+  DB 的代价是建表 + 迁移 + 读写时序，换来"重启后冷却仍生效"的微小价值。
+  最坏情况——进程重启时一个实体被多发 1 次告警——完全可接受
+- **没收到告警的排查路径**：5 个分层判断点，从下到上排，覆盖率 99%
+
+### Q6.1 为什么冷却用进程内 dict 而不持久化
+
+#### 持久化方案的"成本 vs 收益"
+
+| 持久化方案要做的事 | 进程内 dict 的代价 |
+|---|---|
+| 加一张 `alert_history` 表 | 0 |
+| 写 alembic 迁移 | 0 |
+| 每次 `_decide_alert` 多查一次 DB | 0 |
+| 每次推送成功多写一次 DB | 0 |
+| 错误处理（DB 写失败时是否还要告警？要不要重试？）| 0 |
+| **可重启 / 可多副本** | **进程重启冷却失效** |
+
+可重启 / 可多副本的价值有多大？
+
+- **重启频率**：本服务平均 1 周重启 < 1 次（部署 / 改 settings）
+- **重启时点**：用户能控制，避开告警高峰即可
+- **多副本**：本服务是 Phase 1 单 worker 设计，**根本没在跑多副本**，未来
+  Phase 3 真要做 HA 再说
+
+**最坏情况**——进程重启 → 某实体在重启前 30 分钟被告警过 → 重启后冷却 dict
+是空的 → 该实体再被告警 1 次。**就这。** 单实体多收 1 条 Telegram 消息，
+没有任何业务损失。
+
+### Q6.2 智能冷却的 4 路径决策树
+
+进程内 dict 不影响"质变升级"功能。系统不简单地"60 分钟内不告警"，而是
+按下面 4 路径决策（按优先级，**顺序不能变**）：
+
+| 优先级 | 触发条件 | 标签 | 设计意图 |
+|---|---|---|---|
+| 1. 首次 | `_alert_records[entity]` 不存在 | `[首次]` | 第一次见这个实体就告警 |
+| 2. 心跳 | 距上次告警 ≥ `alert_heartbeat_hours`（默认 6h） | `[持续 Nh]` | 持续热点 6h 一次"我还在烧"提醒 |
+| 3. growth 升级 | 本次 growth ≥ 上次 × `escalation_growth_multiplier`（默认 1.5）| `[升级 → growth ×X.X]` | 突然加速的信号必须刷新 |
+| 4. 跨源升级 | cross_source 增加 | `[跨源升级 +N]` | 多平台共振的信号必须刷新 |
+| —（不告警）| 60min 内 + 无以上质变 | （静默） | 防刷屏 |
+| 5. 重新触发 | 出 60min 冷却 + 仍达阈值 | `[重新触发]` | 持续热点的常规告警节奏 |
+
+**心跳必须放在 growth 升级之前**——一个持续 6 小时但 growth 没大变的热点
+如果心跳放后面，会落到"60min 内 + 无质变"分支被静默掉。
+
+### Q6.3 没收到告警怎么排查（5 个分层判断点）
+
+按下面顺序排查，找到第一个"不通"的就停。
+
+#### Step 1：服务在跑吗
+
+```bash
+pgrep -fl 'python.*main.py'
+```
+
+没输出 → 进程死了，跑 `./scripts/restart.sh --bg` 重启。
+
+#### Step 2：AlertTriggerService 启动了吗
+
+```bash
+grep "AlertTriggerService 启动" logs/service.log | tail -1
+```
+
+| 输出 | 含义 |
+|---|---|
+| `AlertTriggerService 启动：growth_threshold=20.0 ...` | OK，继续下一步 |
+| `Telegram 告警未配置（token/chat_id 为空），已禁用` | token 或 chat_id 没填，去 `config/_alerts.py` 填值后重启 |
+| 啥都没匹配到 | 本次启动还没到 AlertTriggerService 那一段；或日志被滚动了，找今天的日志文件 |
+
+#### Step 3：hotness_snapshots 有产出吗
+
+最新的 hotness window_end 多久前？
+
+```sql
+SELECT max(window_end) FROM hotness_snapshots WHERE window_type='1h';
+```
+
+- < 30 分钟前 → OK，继续下一步
+- > 30 分钟前 → hotness 主流程卡了，先排查 hotness（见 `docs/operations_guide.md` §4 场景 A），
+  hotness 不出榜，告警自然没东西可推
+
+#### Step 4：有实体满足三道门槛吗
+
+最新窗口里有没有 growth ≥ threshold 的记录？
+
+```sql
+SELECT entity, growth_rate, count_short, cross_source
+FROM hotness_snapshots
+WHERE window_end = (SELECT max(window_end) FROM hotness_snapshots)
+  AND growth_rate >= 20.0      -- 跟你的 alert_growth_threshold 对齐
+  AND count_short >= 3         -- alert_min_count_short
+  AND cross_source >= 1        -- alert_min_cross_source
+ORDER BY growth_rate DESC;
+```
+
+- 0 行 → **没有合格实体**，是"今天没新热点"，不是 bug。如果一周持续 0 行，
+  考虑把 `alert_growth_threshold` 调小（参考 `docs/operations_guide.md` §6.1）
+- ≥ 1 行 → 应该会告警，继续下一步
+
+#### Step 5：是被冷却跳过 / Telegram 推送失败了吗
+
+```bash
+# 是不是被冷却跳过了
+grep "alert skipped" logs/service.log | tail -10
+
+# 是不是 Telegram 推送失败了
+grep "telegram .*error" logs/service.log | tail -10
+
+# 真的发出过告警吗
+grep "alert sent" logs/service.log | tail -10
+```
+
+| 现象 | 原因 | 动作 |
+|---|---|---|
+| 大量 `alert skipped: ... 60min 内无质变` | 本来就在冷却中 | 等冷却到期或等"质变"，是正确行为 |
+| `telegram http error: 401 Unauthorized` | Token 错了 | BotFather `/revoke` 重发 token，更新 `config/_alerts.py` |
+| `telegram http error: 400 Bad Request` | chat_id 错了 / Bot 没被加进群 | 私聊场景：先在 Telegram 给 Bot 发一条消息再用 getUpdates 拿 chat_id |
+| `telegram network error` | 服务器到 api.telegram.org 不通 | 国内环境检查 VPN；试 `curl -m 5 https://api.telegram.org/bot<TOKEN>/getMe` |
+| `alert sent` 有，但你手机没收到 | Telegram 客户端通知静音了 | 检查手机端 Bot 通知设置；或换台手机看 |
+
+### Q6.4 端到端联调最快验证方式
+
+不想等下一份榜出来？直接调 TelegramClient 测一条：
+
+```bash
+.venv/bin/python -c "
+from config.settings import get_settings
+from notifications.telegram_client import TelegramClient
+s = get_settings()
+client = TelegramClient(bot_token=s.telegram_bot_token, chat_id=s.telegram_chat_id)
+print('result:', client.send_text('PomsAI 告警链路联调测试'))
+"
+```
+
+- `result: True` + 手机收到消息 → 链路完全 OK，问题在上面 Step 3/4（hotness
+  没产出 / 没合格实体）
+- `result: True` + 手机没收到 → 看 Telegram 通知设置 / 手机网络
+- `result: False` → 看终端的 `telegram .*error` 日志，对照上面 Step 5 的表
+
+### Q6.5 一句话结论
+
+**冷却用进程内 dict 而不持久化**——成本几乎为 0，最坏代价（重启多发 1 条）
+完全可接受。**没收到告警**按上面 Step 1→5 顺序排查，99% 落在 Step 3/4
+（hotness 自身没产出 / 没合格实体），跟告警系统本身无关。
+
