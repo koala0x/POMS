@@ -78,103 +78,122 @@ def main() -> None:
     db = Database(settings)
     logger.info("数据库连接已初始化(不再执行建表)")
 
-    # 一次摘要(level1)与二次摘要(level2)使用各自的 Ollama 客户端,
-    # 这样可以给低频高质量的 level2 配置更大模型/更长 timeout。
-    ollama_l1 = OllamaClient(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model_level1,
-        timeout_seconds=settings.ollama_timeout_level1,
-    )
-    ollama_l2 = OllamaClient(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model_level2,
-        timeout_seconds=settings.ollama_timeout_level2,
-    )
-    logger.info(
-        "Ollama 客户端就绪:level1={} (timeout {}s) / level2={} (timeout {}s)",
-        settings.ollama_model_level1,
-        settings.ollama_timeout_level1,
-        settings.ollama_model_level2,
-        settings.ollama_timeout_level2,
-    )
+    # ======================================================================
+    # 老链路（Level1Service / Level2Service）构造
+    # ---------------------------------------------------------------------
+    # 受 settings.disable_legacy_pipeline 开关控制：
+    # - True  → 跳过所有老链路相关初始化（包括 Ollama 客户端），本段空转
+    # - False → 老链路和新链路并行跑（原始行为）
+    #
+    # 关掉老链路后，Jobs.level1_services / level2_services 传空列表，
+    # worker 只迭代 Phase 1 新链路的 new_services。
+    # ======================================================================
+    level1_services: list = []
+    level2_services: list = []
 
-    # 仓储层:原始表(twitter/binance/discord)与摘要表(level1/level2)
-    twitter_repo = TwitterRepo()
-    binance_repo = BinanceRepo()
-    discord_repo = DiscordRepo()
-    level1_repo = Level1Repo()
-    level2_repo = Level2Repo()
+    if not settings.disable_legacy_pipeline:
+        # 一次摘要(level1)与二次摘要(level2)使用各自的 Ollama 客户端,
+        # 这样可以给低频高质量的 level2 配置更大模型/更长 timeout。
+        ollama_l1 = OllamaClient(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model_level1,
+            timeout_seconds=settings.ollama_timeout_level1,
+        )
+        ollama_l2 = OllamaClient(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model_level2,
+            timeout_seconds=settings.ollama_timeout_level2,
+        )
+        logger.info(
+            "Ollama 客户端就绪:level1={} (timeout {}s) / level2={} (timeout {}s)",
+            settings.ollama_model_level1,
+            settings.ollama_timeout_level1,
+            settings.ollama_model_level2,
+            settings.ollama_timeout_level2,
+        )
 
-    # Prompt 模板目录
-    base_dir = Path(__file__).resolve().parent
-    prompts_dir = base_dir / "prompts"
+        # 仓储层:原始表(twitter/binance/discord)与摘要表(level1/level2)
+        twitter_repo = TwitterRepo()
+        binance_repo = BinanceRepo()
+        discord_repo = DiscordRepo()
+        level1_repo = Level1Repo()
+        level2_repo = Level2Repo()
 
-    # 业务层:分别为三个 source 构建 service(互不合并)
-    level1_services = [
-        Level1Service(
-            db=db,
-            source="twitter",
-            batch_size=settings.batch_size,
-            raw_repo=twitter_repo,
-            level1_repo=level1_repo,
-            ollama=ollama_l1,
-            prompt_path=prompts_dir / "level1_twitter.txt",
-            timezone=settings.timezone,
-        ),
-        Level1Service(
-            db=db,
-            source="binance_square",
-            batch_size=settings.batch_size,
-            raw_repo=binance_repo,
-            level1_repo=level1_repo,
-            ollama=ollama_l1,
-            prompt_path=prompts_dir / "level1_binance.txt",
-            timezone=settings.timezone,
-        ),
-        Level1Service(
-            db=db,
-            source="discord",
-            batch_size=settings.batch_size,
-            raw_repo=discord_repo,
-            level1_repo=level1_repo,
-            ollama=ollama_l1,
-            prompt_path=prompts_dir / "level1_discord.txt",
-            timezone=settings.timezone,
-        ),
-    ]
+        # Prompt 模板目录
+        base_dir = Path(__file__).resolve().parent
+        prompts_dir = base_dir / "prompts"
 
-    level2_services = [
-        Level2Service(
-            db=db,
-            source="twitter",
-            threshold=settings.level2_threshold,
-            level1_repo=level1_repo,
-            level2_repo=level2_repo,
-            ollama=ollama_l2,
-            prompt_path=prompts_dir / "level2_twitter.txt",
-            timezone=settings.timezone,
-        ),
-        Level2Service(
-            db=db,
-            source="binance_square",
-            threshold=settings.level2_threshold,
-            level1_repo=level1_repo,
-            level2_repo=level2_repo,
-            ollama=ollama_l2,
-            prompt_path=prompts_dir / "level2_binance.txt",
-            timezone=settings.timezone,
-        ),
-        Level2Service(
-            db=db,
-            source="discord",
-            threshold=settings.level2_threshold,
-            level1_repo=level1_repo,
-            level2_repo=level2_repo,
-            ollama=ollama_l2,
-            prompt_path=prompts_dir / "level2_discord.txt",
-            timezone=settings.timezone,
-        ),
-    ]
+        # 业务层:分别为三个 source 构建 service(互不合并)
+        level1_services = [
+            Level1Service(
+                db=db,
+                source="twitter",
+                batch_size=settings.batch_size,
+                raw_repo=twitter_repo,
+                level1_repo=level1_repo,
+                ollama=ollama_l1,
+                prompt_path=prompts_dir / "level1_twitter.txt",
+                timezone=settings.timezone,
+            ),
+            Level1Service(
+                db=db,
+                source="binance_square",
+                batch_size=settings.batch_size,
+                raw_repo=binance_repo,
+                level1_repo=level1_repo,
+                ollama=ollama_l1,
+                prompt_path=prompts_dir / "level1_binance.txt",
+                timezone=settings.timezone,
+            ),
+            Level1Service(
+                db=db,
+                source="discord",
+                batch_size=settings.batch_size,
+                raw_repo=discord_repo,
+                level1_repo=level1_repo,
+                ollama=ollama_l1,
+                prompt_path=prompts_dir / "level1_discord.txt",
+                timezone=settings.timezone,
+            ),
+        ]
+
+        level2_services = [
+            Level2Service(
+                db=db,
+                source="twitter",
+                threshold=settings.level2_threshold,
+                level1_repo=level1_repo,
+                level2_repo=level2_repo,
+                ollama=ollama_l2,
+                prompt_path=prompts_dir / "level2_twitter.txt",
+                timezone=settings.timezone,
+            ),
+            Level2Service(
+                db=db,
+                source="binance_square",
+                threshold=settings.level2_threshold,
+                level1_repo=level1_repo,
+                level2_repo=level2_repo,
+                ollama=ollama_l2,
+                prompt_path=prompts_dir / "level2_binance.txt",
+                timezone=settings.timezone,
+            ),
+            Level2Service(
+                db=db,
+                source="discord",
+                threshold=settings.level2_threshold,
+                level1_repo=level1_repo,
+                level2_repo=level2_repo,
+                ollama=ollama_l2,
+                prompt_path=prompts_dir / "level2_discord.txt",
+                timezone=settings.timezone,
+            ),
+        ]
+    else:
+        logger.info(
+            "老链路已关闭（settings.disable_legacy_pipeline=True）："
+            "跳过 Ollama 客户端与 Level1/Level2 Service 初始化"
+        )
 
     # ======================================================================
     # Phase 1 新链路（crypto-narrative-radar）初始化
@@ -282,12 +301,21 @@ def main() -> None:
         new_services=new_services,
     )
     jobs.start()
-    logger.info(
-        "服务启动成功:summary worker 串行 (level1 batch={} / level2 threshold={},空闲 sleep {}s)",
-        settings.batch_size,
-        settings.level2_threshold,
-        settings.poll_interval_seconds,
-    )
+    if settings.disable_legacy_pipeline:
+        logger.info(
+            "服务启动成功:worker 只跑新链路 (Phase 1 new services={}，空闲 sleep {}s)",
+            len(new_services),
+            settings.poll_interval_seconds,
+        )
+    else:
+        logger.info(
+            "服务启动成功:worker 串行跑老+新链路 "
+            "(level1 batch={} / level2 threshold={} / new services={}，空闲 sleep {}s)",
+            settings.batch_size,
+            settings.level2_threshold,
+            len(new_services),
+            settings.poll_interval_seconds,
+        )
 
     try:
         # worker 在后台线程跑,主线程只需要常驻

@@ -139,6 +139,25 @@ class Settings:
     timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
 
     # ==========================================================================
+    # 5.1 老链路总开关（Phase 1 过渡期临时添加）
+    # --------------------------------------------------------------------------
+    # True  = 停掉老链路（Level1Service / Level2Service），不调 Ollama
+    # False = 老链路和新链路并行跑（原始设计）
+    #
+    # 背景：
+    # - 老链路只是把原始消息送 LLM 写中文摘要（summary_level1/2 两张表）
+    # - Phase 1 的重心是"实体热度排行榜"新链路，产品方向聚焦后不需要老链路
+    # - 完全保留老链路代码与 Ollama 配置，未来想开回来只要把这个开关设回 False
+    #
+    # 影响：
+    # - True 时，main.py 会跳过 OllamaClient / 原始表 repo / level1/2 service
+    #   的构造，启动更快；Jobs.level1_services 与 level2_services 传空列表，
+    #   worker 只迭代 new_services（Phase 1 新链路）
+    # - level1_service.py / level2_service.py 代码本身不动，测试也仍然跑
+    # ==========================================================================
+    disable_legacy_pipeline: bool = True
+
+    # ==========================================================================
     # 6. Phase 1 新流水线（crypto-narrative-radar）
     # --------------------------------------------------------------------------
     # 零 LLM 的实体热度排行榜新链路配置。与老 level1/level2 参数互不影响，
