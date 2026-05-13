@@ -245,8 +245,8 @@ class FilterDecision:
 
     entities 字段带默认值 `field(default_factory=list)`（requirements.md Req 4.1）：
     - **关键兼容性**：老代码 `FilterDecision(True, "A:$symbol")` / `FilterDecision(False, "D:length<20")`
-      这种两参数构造方式必须继续可用，不产生 TypeError；`Level1Service.split()` 老调用方
-      只读 `keep` / `reason`，不会被 entities 字段影响。
+      这种两参数构造方式必须继续可用，不产生 TypeError。历史上 `Level1Service.split()`
+      的老调用方依赖这个兼容性（已于 2026-05 随老链路一并淘汰，但保留无副作用）。
     - Task 2.3a/2.3b 里 `classify` 的新实现会显式传入实体列表；老的短路 return
       可以直接两参数返回，自动得到 `entities=[]`。
     """
@@ -324,7 +324,8 @@ def classify(content: str) -> FilterDecision:
     对单条帖子内容做 keep / drop 决策，同时产出实体标签。
 
     返回值（Task 2.3b 起）：
-    - `keep` / `reason`：与 v1.0 行为完全一致（老 Level1Service 只读这两个字段）
+    - `keep` / `reason`：与 v1.0 行为完全一致（历史上老 `Level1Service` 只读这两个字段；
+      已淘汰，但行为契约保留以便未来其他调用方继续走两元组）
     - `entities`：本条消息抽取到的实体列表；被 keep=False 的消息也会带上，
       但下游 L1 只对原版（非重复 + 非被过滤）消息消费，不会造成冗余写入
 

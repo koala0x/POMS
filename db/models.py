@@ -160,78 +160,6 @@ class DiscordMessage(Base):
         return f"#{self.channel_name} @{self.username}"
 
 
-class SummaryLevel1(Base):
-    """
-    一次摘要表。
-
-    - source:数据来源('twitter' / 'binance_square'),与原始表对应
-    - raw_ids:本批次涉及的原始数据 id 列表(对应原始表主键,逻辑引用,不建外键)
-    - is_summarized_l2:是否已被二次摘要消费
-    """
-
-    __tablename__ = "summary_level1"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    source: Mapped[str] = mapped_column(String(32), nullable=False)
-    summary: Mapped[str] = mapped_column(Text, nullable=False)
-    raw_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
-    raw_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-    is_summarized_l2: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default="false",
-    )
-
-    __table_args__ = (
-        Index("idx_summary_level1_source_created_at", "source", "created_at"),
-        Index("idx_summary_level1_l2_created_at", "is_summarized_l2", "created_at"),
-    )
-
-
-class SummaryLevel2(Base):
-    """
-    二次摘要表。
-
-    - level1_ids:本次涉及的 summary_level1.id 列表(逻辑引用)
-    - period_start / period_end:覆盖的时间窗口 [start, end)
-    """
-
-    __tablename__ = "summary_level2"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    source: Mapped[str] = mapped_column(String(32), nullable=False)
-    summary: Mapped[str] = mapped_column(Text, nullable=False)
-    level1_ids: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
-    level1_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    period_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    period_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-    )
-
-    __table_args__ = (
-        Index("idx_summary_level2_source_created_at", "source", "created_at"),
-        Index(
-            "idx_summary_level2_source_period",
-            "source",
-            "period_start",
-            "period_end",
-        ),
-    )
-
-
 # ============================================================================
 # Phase 1 新增：加密叙事雷达（crypto-narrative-radar）
 # ----------------------------------------------------------------------------
@@ -547,8 +475,6 @@ __all__ = [
     "TwitterPost",
     "BinanceSquarePost",
     "DiscordMessage",
-    "SummaryLevel1",
-    "SummaryLevel2",
     "NormalizedMessage",
     "EntityMention",
     "HotnessSnapshot",

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 """
-**新链路**配置（Phase 1 crypto-narrative-radar）。
+新链路业务流水线配置。
 
-零 LLM 的实体热度排行榜流水线参数：
+涵盖：
 - L0 Normalizer / Deduplicator
 - L1 EntityExtractor
-- L2 SlidingCounter / HotnessService
+- L2 SlidingCounter / HotnessService（1h / 6h / 24h 三窗口）
+- L3 CooccurrenceService
+- L5 BriefingService（业务参数；Ollama 模型 / 超时去 _llm.py）
 
-修改这里的字段不会影响老链路（Level1/Level2Service / Ollama）。
+历史变更（2026-05）：老链路（Level1Service / Level2Service）已淘汰，
+旧的 `batch_size` / `level2_threshold` 配置已删。
 
 每条字段都标注了对应的 requirements.md Req 编号，便于回溯设计意图。
 """

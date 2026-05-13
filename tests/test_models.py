@@ -16,22 +16,22 @@ from sqlalchemy.schema import CreateTable
 from db.models import (
     Base,
     BinanceSquarePost,
-    SummaryLevel1,
-    SummaryLevel2,
     TwitterPost,
 )
 
 
 def test_tables_registered() -> None:
-    """十张业务表都应注册在 metadata 上（Phase 2.7 在前面 9 张之上再加一张）。"""
+    """八张业务表都应注册在 metadata 上。
+
+    历史变更（2026-05）：老链路淘汰，metadata 不再注册 summary_level1 /
+    summary_level2 ORM；DB 里两张表数据保留作历史归档。
+    """
     expected = {
-        # 原有 5 张
+        # 三张原始表（抓取服务写入；新链路只读）
         "twitter_posts",
         "binance_square_posts",
         "discord_messages",
-        "summary_level1",
-        "summary_level2",
-        # Phase 1 新增：crypto-narrative-radar L0/L1/L2
+        # Phase 1：crypto-narrative-radar L0/L1/L2
         "normalized_messages",
         "entity_mentions",
         "hotness_snapshots",
@@ -113,51 +113,11 @@ def test_raw_post_constraints() -> None:
     assert columns["is_summarized"].default.arg is False
 
 
-def test_summary_level1_columns() -> None:
-    columns = {c.name: c for c in inspect(SummaryLevel1).columns}
-    assert set(columns) == {
-        "id",
-        "source",
-        "summary",
-        "raw_ids",
-        "raw_count",
-        "created_at",
-        "is_summarized_l2",
-    }
-    assert columns["raw_ids"].nullable is False
-    assert columns["raw_count"].nullable is False
-    assert columns["is_summarized_l2"].default.arg is False
-
-
-def test_summary_level2_columns() -> None:
-    columns = {c.name: c for c in inspect(SummaryLevel2).columns}
-    assert set(columns) == {
-        "id",
-        "source",
-        "summary",
-        "level1_ids",
-        "level1_count",
-        "period_start",
-        "period_end",
-        "created_at",
-    }
-    assert columns["period_start"].nullable is False
-    assert columns["period_end"].nullable is False
-
-
 def test_indexes_defined() -> None:
     """关键查询路径上的索引应在 metadata 中注册。"""
     expected_indexes = {
         "twitter_posts": {"idx_twitter_posts_summarized_created_at"},
         "binance_square_posts": {"idx_binance_square_posts_summarized_created_at"},
-        "summary_level1": {
-            "idx_summary_level1_source_created_at",
-            "idx_summary_level1_l2_created_at",
-        },
-        "summary_level2": {
-            "idx_summary_level2_source_created_at",
-            "idx_summary_level2_source_period",
-        },
     }
     for table_name, names in expected_indexes.items():
         table = Base.metadata.tables[table_name]
@@ -168,21 +128,13 @@ def test_indexes_defined() -> None:
 def test_postgres_ddl_rendering() -> None:
     """
     在 PostgreSQL 方言下编译 DDL,应渲染出预期的关键字:
-    - BIGSERIAL(自增主键)、TIMESTAMP WITH TIME ZONE、BIGINT[]
+    - BIGSERIAL(自增主键)、TIMESTAMP WITH TIME ZONE
     """
     dialect = postgresql.dialect()
 
     twitter_ddl = str(CreateTable(TwitterPost.__table__).compile(dialect=dialect))
     assert "BIGSERIAL" in twitter_ddl  # autoincrement 主键
     assert "TIMESTAMP WITH TIME ZONE" in twitter_ddl  # created_at / posted_at
-
-    level1_ddl = str(CreateTable(SummaryLevel1.__table__).compile(dialect=dialect))
-    assert "BIGINT[]" in level1_ddl  # raw_ids
-    assert "TIMESTAMP WITH TIME ZONE" in level1_ddl
-
-    level2_ddl = str(CreateTable(SummaryLevel2.__table__).compile(dialect=dialect))
-    assert "BIGINT[]" in level2_ddl  # level1_ids
-    assert "TIMESTAMP WITH TIME ZONE" in level2_ddl
 
 
 # ============================================================================

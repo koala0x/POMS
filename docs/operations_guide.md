@@ -8,31 +8,28 @@
 ## 0. 这是个啥系统？一句话版
 
 它是一个**后台常驻进程**，每 30 秒醒一次，从数据库几张表里拿新消息，加工后
-写到另几张表。最终产物是一份**"最近 15 分钟加密圈谁在被热议"的排行榜**。
+写到另几张表。最终产物是一份**"最近 15 分钟加密圈谁在被热议"的排行榜** +
+**Telegram 告警** + **LLM 简报**。
 
 对应 Android 开发：就是一个永不退出的 `Service` + `AlarmManager`，读 Room
 数据库 A 几张表、写 Room 数据库 B 几张表。就这么朴素。
 
-### 系统有两条独立的流水线
+### 系统流水线
 
 ```
-┌─ 老链路（调 Ollama LLM 做文本摘要）──────────────────────────────┐
-│  twitter_posts/binance_square_posts/discord_messages             │
-│    → Level1Service →  summary_level1                             │
-│    → Level2Service →  summary_level2                             │
-└──────────────────────────────────────────────────────────────────┘
-
-┌─ 新链路（Phase 1，纯统计，不调 LLM）────────────────────────────┐
-│  twitter_posts/binance_square_posts/discord_messages             │
+┌─ 数据流 ─────────────────────────────────────────────────────────┐
+│  twitter_posts / binance_square_posts / discord_messages         │
 │    → NormalizerService    → normalized_messages                  │
 │    → EntityExtractor      → entity_mentions                      │
-│    → HotnessService       → hotness_snapshots（最终产品）        │
+│    → HotnessService ×3    → hotness_snapshots（1h/6h/24h）       │
+│    → CooccurrenceService  → entity_cooccurrence                  │
+│    → AlertTriggerService  → Telegram                             │
+│    → BriefingService(LLM) → entity_briefings                     │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-两条链路**共用一个后台线程串行跑**（避免 Ollama 模型反复 swap），但彼此
-数据隔离、互不影响。任何时候想"砍掉"新链路回到只跑老链路，改 `main.py`
-里一行就行（见 `docs/rollback_plan.md`）。
+历史变更（2026-05）：老链路（Level1Service / Level2Service / Ollama 摘要）
+已淘汰；现在系统**只跑新链路 + LLM 简报**。
 
 ---
 
@@ -65,19 +62,20 @@ cd /Users/ye/Work/Crypto/PomsAI
 
 ```
 数据库连接已初始化
-老链路已关闭（settings.disable_legacy_pipeline=True）：跳过 Ollama 客户端与 Level1/Level2 Service 初始化
-词典就绪：tickers=57 chains=0 narratives=0 kols=0 aliases=64
+词典就绪：tickers=24 chains=12 narratives=12 kols=0 aliases=160
 SlidingCounter backfill 结束：ok=True total=<N> elapsed=<X.X>s
 HotnessService(1h)  启动：top_k=20 smoothing=2.0  baseline_days=7 min_baseline_count=100
 HotnessService(6h)  启动：top_k=20 smoothing=5.0  baseline_days=7 min_baseline_count=200
 HotnessService(24h) 启动：top_k=20 smoothing=10.0 baseline_days=8 min_baseline_count=500
-AlertTriggerService 启动：growth_threshold=20.0 cooldown=60min escalation×1.5 heartbeat=6h
-服务启动成功:worker 只跑新链路 (Phase 1 new services=6，空闲 sleep 30s)
+CooccurrenceService 启动：window=24h top_pairs=100 min_pmi=1.0 min_cooccur=3
+AlertTriggerService 启动：growth_threshold=5.0 cooldown=60min escalation×1.5 heartbeat=6h briefing=ON
+RealtimeAlertService 启动：burst=50 growth_threshold=30.0 min_count_short=5 cooldown=60min
+BriefingService 启动：top_n=5 min_growth=5.0 evidence_count=10 model=qwen3:8b cooccur_hint=ON
+服务启动成功：worker 跑 7 个 service，空闲 sleep 30s
 ```
 
-> 说明：`disable_legacy_pipeline` 默认 `True`，只跑新链路（Phase 1 热度排行榜）。
-> 想把老链路 LLM 摘要打开，改 `config/settings.py` 里 `disable_legacy_pipeline: bool = True` → `False`，
-> 然后重启服务。代码本身不用动。
+> 说明：当前系统只跑新链路（老链路 Level1Service / Level2Service 已于 2026-05
+> 淘汰）。
 >
 > **Phase 2.1 新增**：`HotnessService` 现在跑三个实例（1h / 6h / 24h），分别产出
 > 短中长三档窗口的排行榜，全部写到同一张 `hotness_snapshots` 表（`window_type` 列区分）。
@@ -161,12 +159,11 @@ SELECT 'normalized_messages' AS tbl, max(created_at) FROM normalized_messages
 UNION ALL
 SELECT 'entity_mentions',       max(ts)               FROM entity_mentions
 UNION ALL
-SELECT 'hotness_snapshots',     max(window_end)       FROM hotness_snapshots;
-
--- 老链路的"最近一次更新时间"
-SELECT 'summary_level1', max(created_at) FROM summary_level1
+SELECT 'hotness_snapshots',     max(window_end)       FROM hotness_snapshots
 UNION ALL
-SELECT 'summary_level2', max(created_at) FROM summary_level2;
+SELECT 'entity_cooccurrence',   max(window_end)       FROM entity_cooccurrence
+UNION ALL
+SELECT 'entity_briefings',      max(window_end)       FROM entity_briefings;
 ```
 
 **判断标准**：
@@ -250,15 +247,6 @@ SELECT count(*), max(ts) FROM normalized_messages;
   服务沟通）
 - 如果 `normalized_messages` 涨了但 `entity_mentions` 不涨 → EntityExtractor
   卡了，去 `grep "entity_extractor" logs/service.log | tail -20` 找 ERROR
-
-### 场景 C：老链路 summary_level1/level2 产出下降
-
-这是硬约束：Phase 1 绝不能让老链路产出变少。如果看到这个现象：
-
-1. 立刻走 `docs/rollback_plan.md` 的流程回滚（改 `main.py` 移除新 service 后重启）
-2. 回滚后观察老链路是否恢复
-3. 如果恢复了 → 说明确实是新链路抢了资源，联系开发者定位
-4. 如果没恢复 → 可能是 Ollama 服务端本身问题，检查 `http://192.168.1.219:11434`
 
 ---
 
@@ -360,14 +348,11 @@ EOF
 
 | 想干嘛 | 改哪个字段 | 说明 |
 |---|---|---|
-| 打开 / 关闭老链路 LLM 摘要 | `disable_legacy_pipeline: True` ↔ `False` | True=只跑新链路；False=老+新并行；关了老链路 Ollama 压根不会被初始化 |
 | 冷启动期想尽快看到排行榜 | `hotness_min_baseline_count: 100 → 20` | 降低"基线样本数"门槛；生产环境记得改回来 |
 | worker 空闲时醒得更频繁（调试用） | `poll_interval_seconds: 30 → 5` | 30s 太慢看不到效果；生产建议 30~60s |
 | SimHash 判重更激进 | `dedup_hamming_threshold: 3 → 5` | 数值越大越容易判成"重复"；上限 6 就差不多了 |
 | 热榜条数从 20 改成 50 | `hotness_top_k: 20 → 50` | |
 | 每轮归一化多扫点 | `normalizer_batch_size: 500 → 2000` | 积压大的时候加速消化；看 DB 能不能扛住 |
-| 换老链路 LLM 模型 | `ollama_model_level1: "qwen3:8b" → "qwen3:30b"` | 先确认 Ollama 端 `ollama pull qwen3:30b` 过了；且 `disable_legacy_pipeline=False` 才生效 |
-| 延长 LLM 超时 | `ollama_timeout_level1: 600 → 1200` | 上了大模型 CPU 慢就得加；同样仅 `disable_legacy_pipeline=False` 时生效 |
 | **关闭 Telegram 告警** | `telegram_bot_token: "" / telegram_chat_id: ""` | 任一为空整个告警服务不构造，hotness 主流程不变（详见下面 6.1 小节） |
 | **告警太频 / 太稀** | `alert_growth_threshold: 20.0 → 10.0 或 50.0` | 数字越大告警越稀。先观察 1 周再调（详见下面 6.1 小节） |
 | **告警冷却时长** | `alert_cooldown_minutes: 60 → 30` | 缩短同实体两次告警的最小间隔；常规情况下 60 分钟够用 |
@@ -800,10 +785,11 @@ HotnessService 写完 1h 榜
 | `briefing_min_growth` | 5.0 | growth < 阈值的实体不调 LLM；当前数据流量下 5.0 偶尔触发，30.0 几乎不触发 |
 | `briefing_evidence_count` | 10 | 喂给 LLM 的代表消息数；多 → prompt 长 → 推理慢；少 → LLM 看不全 |
 
-`config/_legacy.py` 的 LLM 配置（沿用老链路分组）：
+`config/_llm.py` 的 LLM 配置：
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
+| `ollama_base_url` | `http://192.168.1.219:11434` | Ollama 服务地址；必须监听 `0.0.0.0` 而非 `127.0.0.1` |
 | `ollama_model_level5` | "qwen3:8b" | 实测 5/5 entity 全合法 JSON；30b 质量更高但单条 ~90s 太慢 |
 | `ollama_timeout_level5` | 600 | 实测平均 30s/次；600s 是兜底（CPU 偶尔会因消息长拖到 90s+）|
 
@@ -950,15 +936,16 @@ AlertTriggerService 启动：growth_threshold=20.0 cooldown=60min escalation×1.
 
 永远别直接 `pip install ...`（会装到系统 python）。
 
-### 坑 2：Ollama 服务挂了，老链路狂刷 ERROR 日志
+### 坑 2：Ollama 服务挂了，BriefingService 狂刷 ERROR 日志
 
-新链路不调 LLM，这种情况只影响老链路。日志里大量：
+新链路里只有 `BriefingService` 调 LLM。Ollama 挂了的话日志大量：
 
 ```
 [twitter] 一次摘要失败：Connection refused
 ```
 
-→ 去 `192.168.1.219` 那台机器重启 Ollama 服务。新链路不受影响继续跑。
+→ 去 `192.168.1.219` 那台机器重启 Ollama 服务。其他 service 不受影响继续跑
+（hotness / alert / cooccur 都不依赖 Ollama）。
 
 ### 坑 3：DB 连接池耗尽（`connection pool exhausted`）
 
@@ -984,14 +971,14 @@ WHERE ts >= now() - INTERVAL '7 days';
 
 | 文档 | 看什么时候 |
 |---|---|
-| `README.md` | 老链路（Phase 0）的介绍，架构背景 |
+| `README.md` | 项目介绍，架构背景 |
 | `docs/operations_guide.md`（本文）| 你现在看的：日常运维 + 调试 |
-| `docs/gate1_checklist.md` | Phase 1 验收期怎么逐条确认指标 |
-| `docs/rollback_plan.md` | 新链路出大问题时如何快速回滚 |
+| `docs/faq_design_decisions.md` | 设计决策的"为什么"（Q1~Q11）|
 | `.kiro/specs/crypto-narrative-radar/requirements.md` | 需求文档（功能规格） |
 | `.kiro/specs/crypto-narrative-radar/design.md` | 架构设计文档 |
 | `.kiro/specs/crypto-narrative-radar/tasks.md` | 实施任务清单 |
 | `.kiro/specs/crypto-narrative-radar/handoff.md` | AI 会话切换用的交接简报 |
+| `文档/终极设计文档.md` | 项目早期 v3.0 整合设计文档（历史归档） |
 
 ---
 
@@ -1002,5 +989,6 @@ WHERE ts >= now() - INTERVAL '7 days';
 3. 本项目的 README + specs 目录里四份文档
 4. 实在搞不定：把错误日志最后 50 行 + 你做了什么操作 一起贴出来问开发者
 
-**一句话原则**：这个系统的设计就是"出了问题回滚很便宜"（见 rollback_plan），
-遇到搞不定的状况先回滚保老链路，有时间再慢慢定位新链路。
+**一句话原则**：这个系统的设计就是"出了问题简单回滚"——遇到搞不定的状况
+先关掉对应的可选服务（`telegram_bot_token`/`briefing_enabled` 等开关），
+hotness 主链路保持运行，再慢慢排查。

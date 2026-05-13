@@ -4,27 +4,37 @@ from __future__ import annotations
 配置中心总入口。
 
 物理拆分（按职责分组）：
-  - _database.py  → DatabaseSettings   PG 连接（新老链路共享）
-  - _runtime.py   → RuntimeSettings    日志 / 时区 / worker 调度（新老链路共享）
-  - _legacy.py    → LegacySettings     老链路：Ollama + level1/2 阈值
-  - _new.py       → NewPipelineSettings 新链路：normalizer/dedup/extractor/hotness
+  - _database.py  → DatabaseSettings    PG 连接
+  - _runtime.py   → RuntimeSettings     日志 / 时区 / worker 调度
+  - _llm.py       → LLMSettings         Ollama 服务（BriefingService 用）
+  - _new.py       → NewPipelineSettings 业务流水线参数（normalizer / dedup /
+                                       extractor / hotness / cooccur / briefing）
+  - _alerts.py    → AlertSettings       Telegram 告警
 
 逻辑组装：
-  Settings 通过 dataclass 多继承把上面 4 块拼成一个对象。
-  对外完全保持 `settings.db_host` `settings.batch_size` `settings.hotness_top_k`
+  Settings 通过 dataclass 多继承把上面 5 块拼成一个对象。
+  对外完全保持 `settings.db_host` `settings.hotness_top_k` `settings.briefing_top_n`
   这种扁平访问方式，**不破坏调用方**。
+
+历史变更（2026-05）：
+  - 老链路（Level1Service / Level2Service）已淘汰
+  - 旧 `LegacySettings`（`config/_legacy.py`）改名为 `LLMSettings`（`config/_llm.py`）
+  - 删除字段：`ollama_model_level1` / `ollama_timeout_level1` /
+    `ollama_model_level2` / `ollama_timeout_level2` / `batch_size` /
+    `level2_threshold` / `disable_legacy_pipeline`
+  - 保留字段：`ollama_base_url` / `ollama_model_level5` / `ollama_timeout_level5`
 
 使用方：
     from config.settings import get_settings
     settings = get_settings()
-    print(settings.batch_size)            # ← LegacySettings 的字段
     print(settings.hotness_top_k)         # ← NewPipelineSettings 的字段
+    print(settings.briefing_top_n)        # ← NewPipelineSettings 的字段
     print(settings.timezone)              # ← RuntimeSettings 的字段
     print(settings.db_host)               # ← DatabaseSettings 的字段
+    print(settings.ollama_model_level5)   # ← LLMSettings 的字段
 
 修改配置：
-  - 找到对应分组文件（_legacy.py / _new.py / _runtime.py / _database.py）
-  - 改字段默认值，重启服务
+  - 找到对应分组文件，改字段默认值，重启服务
 
 测试中如需修改：
   - get_settings.cache_clear() 后重建实例
@@ -36,7 +46,7 @@ from functools import lru_cache
 
 from ._alerts import AlertSettings
 from ._database import DatabaseSettings
-from ._legacy import LegacySettings
+from ._llm import LLMSettings
 from ._new import NewPipelineSettings
 from ._runtime import RuntimeSettings
 
@@ -45,7 +55,7 @@ from ._runtime import RuntimeSettings
 class Settings(
     DatabaseSettings,
     RuntimeSettings,
-    LegacySettings,
+    LLMSettings,
     NewPipelineSettings,
     AlertSettings,
 ):
@@ -53,15 +63,13 @@ class Settings(
     全部配置的"扁平视图"。
 
     通过 dataclass 多继承把 5 个分组合并到一个对象上。所有字段名跨分组
-    必须不重复（dataclass 多继承会因重名字段产生不可预期行为，loader 启动
-    会报错或后定义覆盖前定义）。
+    必须不重复。
 
     继承顺序的副作用：MRO 从左到右是
-        Settings → DatabaseSettings → RuntimeSettings → LegacySettings
+        Settings → DatabaseSettings → RuntimeSettings → LLMSettings
                  → NewPipelineSettings → AlertSettings
-    访问 `settings.<field>` 时按 MRO 找，所以同名字段以**靠左继承的优先**。
-    当前各分组字段名互不重叠（AlertSettings 全部带 alert_/telegram_ 前缀），
-    顺序不影响行为。
+    访问 `settings.<field>` 时按 MRO 找；当前各分组字段名互不重叠
+    （AlertSettings 全部带 alert_/telegram_ 前缀），顺序不影响行为。
     """
 
 
@@ -76,14 +84,12 @@ def get_settings() -> Settings:
     return Settings()
 
 
-# 公开导出 —— 调用方习惯 `from config.settings import get_settings, Settings`
 __all__ = [
     "Settings",
     "get_settings",
-    # 顺带把 5 个分组类也导出，方便测试 / 类型标注精准引用某个子集
     "DatabaseSettings",
     "RuntimeSettings",
-    "LegacySettings",
+    "LLMSettings",
     "NewPipelineSettings",
     "AlertSettings",
 ]
