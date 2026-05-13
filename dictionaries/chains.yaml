@@ -152,3 +152,10 @@ Berachain:
     - Bera 链
     - Berachain ecosystem
     - Bera 生态
+
+ARCchain:
+  type: chain
+  aliases:
+    - ARC 链
+    - ARC ecosystem
+    - ARC 生态
