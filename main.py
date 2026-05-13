@@ -381,6 +381,11 @@ def main() -> None:
     # 任一为空 → log INFO 跳过（用户决策"先观察 hotness 再决定要不要开告警"，
     # 不 raise 阻塞启动；requirements.md Req 4.3 / Req 5.4 / 硬约束 5）。
     # 调度顺序：必须在 hotness_service 之后（保证最新榜单已写入再扫描）。
+    #
+    # 预声明 None：Step 5e（RealtimeAlertService）需要引用 alert_service /
+    # telegram_client，无论 if 分支是否进入都要保证名字在作用域内。
+    alert_service = None
+    telegram_client = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         from notifications.telegram_client import TelegramClient
         from services.l2_alert_trigger import AlertTriggerService
@@ -413,6 +418,84 @@ def main() -> None:
         )
     else:
         logger.info("Telegram 告警未配置（token/chat_id 为空），已禁用")
+
+    # =============================================================================
+    # Step 5e：RealtimeAlertService（Phase 2.4 实时触发，design.md §3.5）
+    # -----------------------------------------------------------------------------
+    # 通过 EntityExtractor.notify(N) hook 同步触发实时榜计算 + Telegram 推送，
+    # 把端到端最坏延迟从 14~15min 压到 1~2min。
+    #
+    # 启用条件（三者全满足才启用）：
+    #   1. settings.realtime_enabled = True
+    #   2. Telegram 已配置（telegram_bot_token / telegram_chat_id 都非空）
+    #   3. AlertTriggerService 已构造（共享 _alert_records 必须有"载体"）
+    #
+    # 任一条件不满足 → 跳过构造 + 打 INFO 日志说明原因（design Req 7.2 三种场景）
+    #
+    # ★ 反向注入：构造完后通过 entity_extractor.realtime_trigger = realtime_service
+    # 把 hook 挂上去（EntityExtractor 已去 frozen，运行时赋值合法）。
+    # ★ 不加入 new_services：本 Service 由 EntityExtractor 内部触发，
+    # 不需要 worker 主循环调度。
+    # =============================================================================
+
+    realtime_service = None
+    if (
+        settings.realtime_enabled
+        and settings.telegram_bot_token
+        and settings.telegram_chat_id
+        and alert_service is not None
+    ):
+        from services.l2_realtime_trigger import RealtimeAlertService
+
+        realtime_service = RealtimeAlertService(
+            db=db,
+            mentions_repo=mentions_repo,
+            # 与 EntityExtractor / HotnessService 共享同一 SlidingCounter 实例
+            sliding_counter=sliding_counter,
+            # 与 AlertTriggerService 共享同一 TelegramClient 实例
+            telegram_client=telegram_client,
+            # ★ 共享冷却 dict（同一对象引用，绝不 deepcopy）
+            shared_alert_records=alert_service._alert_records,
+            # 触发参数（来自 settings）
+            burst_threshold=settings.realtime_burst_threshold,
+            growth_threshold=settings.realtime_growth_threshold,
+            min_count_short=settings.realtime_min_count_short,
+            # 公式参数（与整点榜 1h 窗口对齐，复用 hotness_smoothing /
+            # hotness_baseline_days；short_hours 在 _trigger_immediate 内固定为 1）
+            smoothing=settings.hotness_smoothing,
+            baseline_days=settings.hotness_baseline_days,
+            baseline_hours_window=settings.hotness_baseline_days * 24
+            - settings.hotness_short_hours,
+            # 黑名单与整点 1h 榜对齐
+            exclude_entities=settings.hotness_exclude_entities,
+            # 智能冷却参数（4 路径决策树，与整点完全一致）
+            cooldown_minutes=settings.alert_cooldown_minutes,
+            escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
+            heartbeat_hours=settings.alert_heartbeat_hours,
+            # 消息模板与时区
+            message_template=settings.alert_message_template,
+            timezone=settings.timezone,
+        )
+
+        # ★ 反向注入：让 EntityExtractor.run_once 末尾的 notify hook 拿到 service
+        entity_extractor.realtime_trigger = realtime_service
+
+        logger.info(
+            "RealtimeAlertService 启动：burst={} growth_threshold={} "
+            "min_count_short={} cooldown={}min",
+            settings.realtime_burst_threshold,
+            settings.realtime_growth_threshold,
+            settings.realtime_min_count_short,
+            settings.alert_cooldown_minutes,
+        )
+    else:
+        # 三种跳过场景（Req 7.2）
+        if not settings.realtime_enabled:
+            logger.info("RealtimeAlertService 未启用（realtime_enabled=False）")
+        elif not (settings.telegram_bot_token and settings.telegram_chat_id):
+            logger.info("RealtimeAlertService 跳过：Telegram 未配置")
+        else:
+            logger.info("RealtimeAlertService 跳过：AlertTriggerService 未启用")
 
     # Step 7：Jobs 构造时注入 new_services
     # 调度层:level1 / level2 / new_services 共用一个 worker 线程串行触发

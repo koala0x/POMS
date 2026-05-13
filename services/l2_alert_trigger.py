@@ -60,6 +60,78 @@ class AlertRecord:
     last_cross_source: int
 
 
+# =============================================================================
+# 模块级决策函数（Phase 2.4 §3.3.2 抽出，实时 / 整点链路共用）
+# -----------------------------------------------------------------------------
+# 把 4 路径决策树（首次 / 心跳 / growth 升级 / 跨源升级 / cooldown 内静默 /
+# 重新触发）抽到模块顶层，让 RealtimeAlertService 不必依赖 AlertTriggerService
+# 的实例就能复用同一份决策逻辑。
+#
+# AlertTriggerService._decide_alert 改成 thin wrapper 调本函数（保持原签名
+# 不变 → 现有 16 个用例 0 回归）。
+# =============================================================================
+
+
+def decide_alert(
+    last: Optional[AlertRecord],
+    current: dict,
+    now: datetime,
+    *,
+    cooldown_minutes: int,
+    escalation_growth_multiplier: float,
+    heartbeat_hours: int,
+) -> tuple[bool, str]:
+    """
+    4 路径决策树（与 Phase 2.2 §3.2.1 等价）。返回 (是否告警, 触发类型标签)。
+
+    `current` 至少含 `growth_rate` / `cross_source` 两个字段；本函数只读这两
+    个字段，其它字段（entity / count_short 等）由调用方自行处理。
+
+    决策树（按优先级，**顺序不可换**）：
+        1. 首次告警（last is None）         → True,  "[首次]"
+        2. 心跳（elapsed >= heartbeat_hours）→ True,  "[持续 Nh]"
+        3. growth 升级（× ≥ multiplier）     → True,  "[升级 → growth ×X.X]"
+        4. 跨源升级（cross_source 增加）     → True,  "[跨源升级 +N]"
+        5. cooldown 内 + 无质变             → False, ""
+        6. cooldown 外 + 仍达阈值           → True,  "[重新触发]"
+
+    ★ 心跳必须在 growth 升级之前判断：否则一个持续 6 小时但 growth 没大变
+    的热点会落到"60min 内 + 无质变"分支被错过（handoff §4.1）。
+    """
+    # 路径 1：首次告警
+    if last is None:
+        return True, "[首次]"
+
+    elapsed = now - last.last_alerted_at
+
+    # 路径 2：心跳提醒（必须在 growth/cross 升级之前判断）
+    if elapsed >= timedelta(hours=heartbeat_hours):
+        hours = int(elapsed.total_seconds() // 3600)
+        return True, f"[持续 {hours}h]"
+
+    # 路径 3：growth 翻倍升级
+    # 防 last_growth_rate=0 除零（理论上不会发生，因为入冷却的都过了 threshold）
+    if (
+        last.last_growth_rate > 0
+        and current["growth_rate"]
+        >= last.last_growth_rate * escalation_growth_multiplier
+    ):
+        ratio = current["growth_rate"] / last.last_growth_rate
+        return True, f"[升级 → growth ×{ratio:.1f}]"
+
+    # 路径 4：跨源升级
+    if current["cross_source"] > last.last_cross_source:
+        delta = current["cross_source"] - last.last_cross_source
+        return True, f"[跨源升级 +{delta}]"
+
+    # 路径 5：常规冷却内 + 无质变 → 不告警
+    if elapsed < timedelta(minutes=cooldown_minutes):
+        return False, ""
+
+    # 路径 6：cooldown 外 + 仍达阈值但无明显升级 → 重新触发
+    return True, "[重新触发]"
+
+
 @dataclass
 class AlertTriggerService:
     """
@@ -203,51 +275,21 @@ class AlertTriggerService:
         """
         智能冷却决策（Req 2.4）。返回 (是否告警, 触发类型标签)。
 
-        决策树（按优先级，**顺序不可换**）：
-            1. 首次告警（rec is None）          → True,  "[首次]"
-            2. 心跳（elapsed >= heartbeat_hours）→ True,  "[持续 Nh]"
-            3. growth 升级（× ≥ multiplier）     → True,  "[升级 → growth ×X.X]"
-            4. 跨源升级（cross_source 增加）     → True,  "[跨源升级 +N]"
-            5. cooldown 内 + 无质变             → False, ""
-            6. cooldown 外 + 仍达阈值           → True,  "[重新触发]"
+        Phase 2.4 重构：决策树本体抽到模块级 `decide_alert` 函数，本方法
+        改成 thin wrapper 让 RealtimeAlertService 也能复用同一份逻辑。
+        保持方法签名不变 → 现有 16 个用例 0 回归。
 
-        ★ 心跳必须在 growth 升级之前判断：否则一个持续 6 小时但 growth 没大变
-        的热点会落到"60min 内 + 无质变"分支被错过（handoff §4.1）。
+        rec 是 ORM 对象（HotnessSnapshot），转成 dict 喂给 decide_alert
+        的两个关键字段：growth_rate / cross_source。
         """
-        last = self._alert_records.get(rec.entity)
-
-        # 路径 1：首次告警
-        if last is None:
-            return True, "[首次]"
-
-        elapsed = now - last.last_alerted_at
-
-        # 路径 2：心跳提醒（必须在 growth/cross 升级之前判断）
-        if elapsed >= timedelta(hours=self.heartbeat_hours):
-            hours = int(elapsed.total_seconds() // 3600)
-            return True, f"[持续 {hours}h]"
-
-        # 路径 3：growth 翻倍升级
-        # 防 last_growth_rate=0 除零（理论上不会发生，因为入冷却的都过了 threshold）
-        if (
-            last.last_growth_rate > 0
-            and rec.growth_rate
-            >= last.last_growth_rate * self.escalation_growth_multiplier
-        ):
-            ratio = rec.growth_rate / last.last_growth_rate
-            return True, f"[升级 → growth ×{ratio:.1f}]"
-
-        # 路径 4：跨源升级
-        if rec.cross_source > last.last_cross_source:
-            delta = rec.cross_source - last.last_cross_source
-            return True, f"[跨源升级 +{delta}]"
-
-        # 路径 5：常规冷却内 + 无质变 → 不告警
-        if elapsed < timedelta(minutes=self.cooldown_minutes):
-            return False, ""
-
-        # 路径 6：cooldown 外 + 仍达阈值但无明显升级 → 重新触发
-        return True, "[重新触发]"
+        return decide_alert(
+            self._alert_records.get(rec.entity),
+            {"growth_rate": rec.growth_rate, "cross_source": rec.cross_source},
+            now,
+            cooldown_minutes=self.cooldown_minutes,
+            escalation_growth_multiplier=self.escalation_growth_multiplier,
+            heartbeat_hours=self.heartbeat_hours,
+        )
 
     def _render_message(self, rec, alert_type: str) -> str:
         """

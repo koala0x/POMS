@@ -425,3 +425,126 @@ def test_entity_extractor_returns_false_on_empty(
         l1_processed_at=_utc_now() - timedelta(hours=1),
     )
     assert service.run_once() is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.4 / Task 2.2：realtime_trigger hook 集成测试
+# 对应 design.md §5 测试矩阵 #7~#9
+# ---------------------------------------------------------------------------
+#
+# 测试策略：
+# - 不真造 RealtimeAlertService，用 unittest.mock.MagicMock 注入到 EntityExtractor
+# - 只断言 hook 调用契约：notify(N) 被调一次 / 不被调 / None 兼容
+# - 复用本文件上方现成的 SQLite + repo 子类 fixture（db / sliding_counter）
+# - 不动其他 8 个用例的状态
+
+
+from unittest.mock import MagicMock
+
+
+def _make_service_with_trigger(
+    db: _SqliteDatabase,
+    sliding_counter: SlidingCounter,
+    *,
+    realtime_trigger: object,
+) -> EntityExtractor:
+    """
+    构造带 realtime_trigger 的 EntityExtractor。
+    每次重置 _id_counter，避免跨用例污染（与 service fixture 同一约定）。
+    """
+    _SqliteFriendlyMentionsRepo._id_counter = 0
+    return EntityExtractor(
+        db=db,
+        normalized_repo=NormalizedMessagesRepo(),
+        mentions_repo=_SqliteFriendlyMentionsRepo(),
+        sliding_counter=sliding_counter,
+        batch_size=100,
+        realtime_trigger=realtime_trigger,
+    )
+
+
+def test_realtime_trigger_called_with_inserted_count(
+    db: _SqliteDatabase, sliding_counter: SlidingCounter
+) -> None:
+    """
+    design.md §5 #7：写入 N 条 entity_mentions 后，
+    `realtime_trigger.notify` 必须被精确调用一次，参数 == to_insert 的长度。
+
+    关键点：N 是实体提及条数（to_insert），不是消息数 len(msgs)。
+    用多 ticker 消息把这俩刻意拉开。
+    """
+    # 消息 1 → 1 个实体（BTC）；消息 2 → 2 个实体（ETH + SOL）
+    # ⇒ msgs=2，to_insert=3
+    _insert_normalized_msg(db, msg_id=1, text="$BTC 起飞")
+    _insert_normalized_msg(db, msg_id=2, text="$ETH and $SOL pumping")
+
+    mock_trigger = MagicMock()
+    service = _make_service_with_trigger(
+        db, sliding_counter, realtime_trigger=mock_trigger
+    )
+
+    assert service.run_once() is True
+
+    # 确认实际写入条数（避免硬编码，万一词典更名也不挂）
+    with db.get_session() as s:
+        actual_n = len(list(s.scalars(select(EntityMention)).all()))
+    assert actual_n >= 1, "前置假设：至少应有一条 entity_mention"
+
+    # ★ 核心断言：notify 调用一次，参数 == 实际写入条数
+    mock_trigger.notify.assert_called_once_with(actual_n)
+
+
+def test_realtime_trigger_not_called_when_zero_insertions(
+    db: _SqliteDatabase, sliding_counter: SlidingCounter
+) -> None:
+    """
+    design.md §5 #8：当本轮抽不到任何实体（to_insert==[]）时，
+    `realtime_trigger.notify` 必须从未被调用。
+
+    实现侧：l1_entity_extractor.py 的 hook 有 `len(to_insert) > 0` 守卫。
+    """
+    # 纯跑题文本，无 ticker / 中文别名 / 词典命中
+    _insert_normalized_msg(
+        db,
+        msg_id=1,
+        text="今天天气不错，适合出去骑车兜风，顺便去超市买点水果和蔬菜",
+    )
+
+    mock_trigger = MagicMock()
+    service = _make_service_with_trigger(
+        db, sliding_counter, realtime_trigger=mock_trigger
+    )
+
+    assert service.run_once() is True
+
+    # 前置确认：确实没抽到实体
+    with db.get_session() as s:
+        mentions = list(s.scalars(select(EntityMention)).all())
+    assert mentions == [], f"前置假设破坏：本应 0 实体，实际 {mentions}"
+
+    # ★ 核心断言：notify 从未被调
+    assert mock_trigger.notify.call_count == 0
+
+
+def test_realtime_trigger_none_does_not_break(
+    db: _SqliteDatabase, service: EntityExtractor
+) -> None:
+    """
+    design.md §5 #9：`realtime_trigger=None`（默认值）下 run_once 行为
+    与 Phase 2.1/2.2 完全等价——不抛异常 + 返回 True + entity_mentions 正常写入。
+
+    用顶部的 `service` fixture（默认 realtime_trigger=None）即可，无需重构造。
+    """
+    # 前置确认：fixture 默认就是 None
+    assert service.realtime_trigger is None
+
+    _insert_normalized_msg(db, msg_id=1, text="$BTC heating up")
+
+    # ★ 不抛 + 返回 True
+    assert service.run_once() is True
+
+    # ★ entity_mentions 写入正常（与 test_entity_extractor_writes_mentions 同款断言）
+    with db.get_session() as s:
+        mentions = list(s.scalars(select(EntityMention)).all())
+    btc = [m for m in mentions if m.entity == "BTC"]
+    assert len(btc) == 1, f"BTC 必须正常落库，实际：{mentions}"

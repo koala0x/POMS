@@ -26,6 +26,7 @@ L1 实体抽取服务。
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
 
@@ -36,8 +37,13 @@ from dictionaries import get_dictionaries
 from services.l2_sliding_counter import SlidingCounter
 from services.prefilter import classify
 
+if TYPE_CHECKING:
+    # 仅类型检查时 import，避免运行时与 services.l2_realtime_trigger 形成
+    # 循环依赖（RealtimeAlertService 不直接 import 本模块，但保持守护更安全）
+    from services.l2_realtime_trigger import RealtimeAlertService
 
-@dataclass(frozen=True)
+
+@dataclass
 class EntityExtractor:
     """
     L1 实体抽取服务（无状态，可单例）。
@@ -55,6 +61,12 @@ class EntityExtractor:
     mentions_repo: EntityMentionsRepo
     sliding_counter: SlidingCounter
     batch_size: int = 500
+
+    # ★ Phase 2.4 新增：实时告警 hook 注入位（main.py Step 5e 反向注入）
+    # 默认 None → 不触发实时告警（向后兼容 Phase 2.1/2.2，行为完全等价）
+    # 用 TYPE_CHECKING 守护避免 services/l2_realtime_trigger.py
+    # 反向 import 本模块时形成循环依赖
+    realtime_trigger: Optional["RealtimeAlertService"] = None
 
     def run_once(self) -> bool:
         """
@@ -130,6 +142,14 @@ class EntityExtractor:
         # 失败路径下绝不动内存，避免"库里没落，但内存认为落了"的脏状态
         for item in to_insert:
             self.sliding_counter.add(item["entity"], item["ts"].timestamp())
+
+        # ★ 实时告警 hook：写库成功后同步通知 RealtimeAlertService 累计 / 触发
+        # 失败完全隔离：任何异常只 log.error，不影响 EntityExtractor 主流程
+        if self.realtime_trigger is not None and len(to_insert) > 0:
+            try:
+                self.realtime_trigger.notify(len(to_insert))
+            except Exception as e:
+                logger.error("realtime_trigger.notify 异常（已隔离）：{}", e)
 
         logger.info(
             "entity_extractor 本轮：处理 {} 条消息 → 产出 {} 条实体提及",
