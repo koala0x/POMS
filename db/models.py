@@ -421,6 +421,69 @@ class HotnessSnapshot(Base):
     )
 
 
+class EntityCooccurrence(Base):
+    """
+    L3 实体共现快照（Phase 2.5 新增）。
+
+    每 15 分钟 CooccurrenceService 触发一次，对 24h 窗口内同消息出现的实体对
+    做 PMI（Pointwise Mutual Information）统计，UPSERT 到本表。
+    幂等键：(entity_a, entity_b, window_end, window_type)。
+
+    canonical pair order：调用方写入前必须保证 `entity_a < entity_b`（字典序），
+    这样 (BTC, ETH) 和 (ETH, BTC) 是同一行；查询时给定 (x, y) 用 (min, max)
+    归一化再查（详见 design.md §3.3）。
+
+    字段说明：
+      - entity_a / entity_b：参与共现的两个实体名，字典序 a < b
+      - window_end：本轮对齐到 :00/:15/:30/:45 的窗口结束时刻
+      - window_type：'1h' / '6h' / '24h'，默认 '24h'（共现需要长窗才稳定）
+      - cooccur_count：短窗内 a 和 b 在同一条消息里出现的次数
+      - pmi：log( cooccur*N / (count_a*count_b) )，归一化共现强度；
+              ≥ 1.0 ≈ "共现概率是独立预期的 e≈2.7 倍"，是 surface 新叙事的核心信号
+      - is_new_pair：baseline=0（前 7 天 0 次共现）且 cooccur_count>=3 →
+              "突然成对"，新叙事候选
+      - created_at：行写入/更新时间
+    """
+
+    __tablename__ = "entity_cooccurrence"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    entity_a: Mapped[str] = mapped_column(String(128), nullable=False)
+    entity_b: Mapped[str] = mapped_column(String(128), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    window_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    cooccur_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    pmi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_new_pair: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "entity_a",
+            "entity_b",
+            "window_end",
+            "window_type",
+            name="uq_cooccur_pair_window",
+        ),
+        Index(
+            "idx_cooccur_window_pmi",
+            "window_end",
+            "window_type",
+            "pmi",
+        ),
+        Index("idx_cooccur_entity_a", "entity_a", "window_end"),
+        Index("idx_cooccur_entity_b", "entity_b", "window_end"),
+    )
+
+
 __all__ = [
     "Base",
     "TwitterPost",
@@ -431,4 +494,5 @@ __all__ = [
     "NormalizedMessage",
     "EntityMention",
     "HotnessSnapshot",
+    "EntityCooccurrence",
 ]

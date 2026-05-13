@@ -89,8 +89,20 @@ AlertTriggerService 启动：growth_threshold=20.0 cooldown=60min escalation×1.
 > `Telegram 告警未配置（token/chat_id 为空），已禁用`，告警系统整体跳过初始化，
 > hotness 主流程不受影响。详见 §6.1 "Telegram 告警调参"。
 >
-> **AlertTriggerService 当前只读 1h 榜**，新增的 6h / 24h 榜对它完全透明。
+> AlertTriggerService 当前只读 1h 榜，新增的 6h / 24h 榜对它完全透明。
 > 未来 Phase 2.2.1 会扩展成多通道告警（给 6h / 24h 各配独立 threshold）。
+>
+> **Phase 2.4 新增**：紧跟在 AlertTriggerService 之后还会出现一行
+> `RealtimeAlertService 启动：burst=50 growth_threshold=30.0 min_count_short=5 cooldown=60min`，
+> 这是把端到端告警延迟从 14~15 分钟压到 1~2 分钟的实时通道，详见 §6.3。
+> `realtime_enabled=False` 或 Telegram 未配置或 AlertTriggerService 未启用任一条件不满足，
+> 这一行会变成 `RealtimeAlertService 跳过：xxx`，整点告警通道不受影响。
+>
+> **Phase 2.5 新增**：在 hotness 之后还会出现一行
+> `CooccurrenceService 启动:window=24h top_pairs=100 min_pmi=1.0 min_cooccur=3`，
+> 这是 L3 实体共现网络服务，每 15 分钟扫一次 entity_mentions 算两两共现 + PMI，
+> 写入新表 entity_cooccurrence，详见 §6.4。
+> `cooccur_enabled=False` 时该服务不构造，hotness/alert 主流程不受影响。
 
 后台跑：
 
@@ -358,6 +370,14 @@ EOF
 | **6h 榜灵敏度** | `hotness_6h_smoothing: 5.0 → 3.0`（更敏感）/ `→ 8.0`（更稳） | smoothing 是 growth 公式分母平滑值，**调小**让冷启动期 growth 更激进、调大更稳健 |
 | **24h 榜灵敏度** | `hotness_24h_smoothing: 10.0 → 5.0` 或 `→ 20.0` | 同上 |
 | **24h 榜屏蔽 BTC/ETH** | `hotness_24h_exclude_entities: ("USDT","USDC","DAI","BTC","ETH")` | 默认 24h 不屏蔽 BTC/ETH（看宏观信号），如果觉得吵就加回去 |
+| **关闭实时告警** | `realtime_enabled: True → False` | 关掉实时通道、保留整点通道。详见 §6.3 |
+| **实时触发频率** | `realtime_burst_threshold: 50 → 100`（更稀）/ `→ 20`（更频） | 累积多少条新提及触发一次实时计算；流量低时实测 5~10 轮（25~50s）攒满 |
+| **实时告警阈值** | `realtime_growth_threshold: 30.0 → 50.0` | 比整点严是因为分钟级窗口 growth 抖动大；调高更严苛 |
+| **实时最少提及次数** | `realtime_min_count_short: 5 → 10` | 防止"3 条提及就触发"的噪音 |
+| **关闭共现网络** | `cooccur_enabled: True → False` | 关掉 L3 共现统计；hotness/alert 主流程不受影响 |
+| **共现 PMI 阈值** | `cooccur_min_pmi: 1.0 → 2.0`（更严）/ `→ 0.5`（更松） | PMI<阈值的对不写库；≥1.0 ≈ 共现概率是独立预期的 e≈2.7 倍 |
+| **共现最少次数** | `cooccur_min_cooccur_count: 3 → 5` | 短窗共现 <阈值 直接过滤；3 次起算趋势 |
+| **共现榜单宽度** | `cooccur_top_pairs: 100 → 50` 或 `→ 200` | 每 quarter 写 Top-K pair |
 
 **注意**：改 DB 配置（`db_host` / `db_port` 等）后重启前先 `psql` 测一下新地址
 通不通，免得进程起来又挂。
@@ -519,6 +539,212 @@ grep "baseline data insufficient" logs/service.log | tail -10
 # 看 6h/24h 实例构造失败（一般是 settings 配错触发 __post_init__ raise）
 grep "HotnessService(.*) 构造失败" logs/service.log | tail -5
 ```
+
+### 6.3 实时告警调参（Phase 2.4 新增）
+
+Phase 2.4 在整点告警之外新增了"实时通道"——把端到端告警延迟从最坏 14~15 分钟
+压到 **1~2 分钟**。它不替代整点告警，而是在 EntityExtractor 写完一批新提及后
+**同步**触发一次轻量计算 + 推送，让用户在第一时间看到突然冒头的实体。
+
+```
+ EntityExtractor 写完 N 条 mention
+   └─► RealtimeAlertService.notify(N) 累计 _pending_count
+         └─► 当 _pending_count ≥ burst_threshold（默认 50）
+               └─► 内存里跑一次 1h 公式 → 命中阈值的 entity → Telegram
+                     共享 _alert_records 与整点告警同 entity 60min 内只发 1 条
+```
+
+#### 与整点通道的关键差异
+
+| 维度 | 整点 AlertTriggerService | 实时 RealtimeAlertService |
+|---|---|---|
+| 触发节奏 | 每 :00/:15/:30/:45 整点跑一次 | 每攒够 N 条新 mention 立刻跑 |
+| 数据源 | 读 `hotness_snapshots` 表（1h 榜） | 内存里现算（**不写表**） |
+| 端到端延迟 | 最坏 14~15 分钟 | 通常 1~2 分钟 |
+| 阈值 | `alert_growth_threshold`（默认 5.0）| `realtime_growth_threshold`（默认 30.0，更严苛） |
+| 消息标签 | `[首次]` / `[升级]` 等 | `[实时][首次]` / `[实时][升级]` 等 |
+| 冷却 dict | 同一份 `_alert_records` | **共享**同一份 dict，跨通道防刷屏 |
+
+**为什么实时阈值更严**：分钟级窗口里的 growth 抖动比整点榜大很多，3 条偶然
+提及可能就被算成 high growth；调严是为了过滤这种短时尖刺。
+
+#### 启停开关
+
+实时通道有**三个**启用条件，全满足才会构造 `RealtimeAlertService`：
+
+1. `realtime_enabled = True`
+2. `telegram_bot_token` + `telegram_chat_id` 都非空（即 Telegram 已配置）
+3. `AlertTriggerService` 已构造（共享冷却 dict 必须有"载体"）
+
+任一条件不满足，启动日志显示 `RealtimeAlertService 跳过：xxx`，**整点通道
+不受影响**——这是有意设计，整点是基线、实时是增益。
+
+想关闭实时只保留整点：把 `config/_alerts.py` 里 `realtime_enabled` 改成 `False`，
+重启即可。
+
+#### 调参速查
+
+`config/_alerts.py` 里和实时相关的字段：
+
+| 字段 | 默认 | 调大 / 调小的效果 |
+|---|---|---|
+| `realtime_burst_threshold` | 50 | **调小**（→20）触发更频繁、CPU 和 Telegram 压力大；**调大**（→100）反之。流量低时实测每 5~10 轮 worker 攒满（25~50s） |
+| `realtime_growth_threshold` | 30.0 | **调小**告警更频；分钟级抖动大，不建议低于 10 |
+| `realtime_min_count_short` | 5 | 防"3 条偶然提及就告警"。**调小**告警更频但噪音多 |
+| `realtime_enabled` | True | False = 整个实时通道关掉，只剩整点 |
+
+智能冷却参数（`alert_cooldown_minutes` / `alert_escalation_growth_multiplier` /
+`alert_heartbeat_hours`）整点和实时**共用**，不需要单独配。
+
+#### 端到端验收（确认实时链路真的跑起来）
+
+实时链路的指纹是 Telegram 消息开头带 `🔥 [实时]` 前缀（整点是 `🔥 [首次]` 这类）。
+
+最快验证：临时把这三个字段调到几乎必触发的值
+
+```python
+# config/_alerts.py
+realtime_burst_threshold: int = 5
+realtime_growth_threshold: float = 1.0
+realtime_min_count_short: int = 1
+```
+
+重启 + 等几分钟，应能收到带 `[实时]` 标签的消息。验证完务必改回生产值
+（默认 50 / 30.0 / 5），否则 Telegram 会被刷屏。
+
+#### 看实时相关日志
+
+```bash
+# 实时触发被点燃
+grep "realtime trigger fired" logs/service.log | tail -10
+
+# 实时一轮跑完的统计（candidates / eligible / alerts）
+grep "realtime trigger done" logs/service.log | tail -10
+
+# 累计但未达阈值（DEBUG 级，要先把日志级别调到 DEBUG 才看得到）
+grep "realtime accumulating" logs/service.log | tail -10
+
+# 实时被时间门限频
+grep "realtime throttled" logs/service.log | tail -10
+
+# 启动时的跳过原因
+grep "RealtimeAlertService 跳过" logs/service.log | tail -3
+```
+
+#### 常见问题
+
+| 现象 | 原因 | 解决 |
+|---|---|---|
+| 启动日志没有 `RealtimeAlertService 启动` | 三个启用条件之一不满足 | grep `RealtimeAlertService 跳过` 找原因 |
+| `realtime trigger fired` 一直没出现 | EntityExtractor 一直 `产出 0 条`，notify 不触发；或累计没到 burst_threshold | 看上游消息流量（§3 自检）；若稀薄可临时调小 `realtime_burst_threshold` |
+| 收到大量 `[实时]` 消息且重复严重 | 阈值还停在联调值 | 改回生产配置（50 / 30.0 / 5）+ 重启 |
+| `[实时]` 和 `[首次]` 同一 entity 都发了 | 不会发生 | 共享冷却 dict 已保证同 entity 60min 内只发 1 条；若真发生检查 `shared_alert_records is alert_service._alert_records` 是否同一引用 |
+
+### 6.4 实体共现网络调参（Phase 2.5 新增）
+
+Phase 2.5 在 entity_mentions 之上加了一层"两两共现统计"——每 15 分钟扫 24h 窗口
+内同一条消息出现的实体对，按 PMI（Pointwise Mutual Information）排序写入新表
+`entity_cooccurrence`，回答"谁正在跟谁一起变热"。本任务**只产数据不接 Telegram**，
+告警通道留 Phase 2.5.1。
+
+```
+EntityExtractor 写完 entity_mentions
+  └─► CooccurrenceService.run_once（每 :00/:15/:30/:45 触发）
+        └─► 候选 = active_entities('24h')，避免 n² 爆炸
+        └─► msg_id 分组 → itertools.combinations(2) → cooccur_count 累计
+        └─► PMI = log( cooccur × N / (count_a × count_b) )
+        └─► is_new_pair 检测（baseline=0 + 短窗 ≥3）
+        └─► UPSERT entity_cooccurrence Top-100
+```
+
+#### 单实体榜 vs 共现网络的产品差异
+
+| 维度 | hotness_snapshots | entity_cooccurrence |
+|---|---|---|
+| 视角 | 节点（谁在变热） | 边（谁跟谁一起变热） |
+| 信号 | 单实体 growth_rate 突变 | 实体对 PMI 高 + is_new_pair |
+| 适合发现 | 单 token 突然爆火（如 `$WIFHAT`） | 叙事级共振（EIGEN+ETHFI+REZ → restaking） |
+| 表行数 | 每 quarter 写 Top-20 | 每 quarter 写 Top-100 pair |
+| 当前是否接 Telegram | 是（`AlertTriggerService`）| 否（留 Phase 2.5.1） |
+
+#### 调参速查
+
+`config/_new.py` 的 `cooccur_*` 字段：
+
+| 字段 | 默认 | 调大 / 调小的效果 |
+|---|---|---|
+| `cooccur_enabled` | True | False = 整服务不构造，零运行时开销 |
+| `cooccur_window_type` | "24h" | 1h 共现噪音太大（消息少 → 随机共现频繁），24h 才是稳定信号源 |
+| `cooccur_top_pairs` | 100 | 每 quarter 写多少 pair |
+| `cooccur_min_cooccur_count` | 3 | 共现 1~2 次属偶然，3 次起算趋势；调小到 2 能 surface 更弱信号但噪音多 |
+| `cooccur_min_pmi` | 1.0 | PMI≥1.0 ≈ 共现概率是独立预期的 e≈2.7 倍；调到 2.0 = 7.4 倍只接强信号 |
+| `cooccur_min_window_msgs` | 50 | 窗口内消息数 < 此值跳过本轮（数据稀疏 PMI 全噪音） |
+
+#### 看共现榜的最快方式
+
+```bash
+.venv/bin/python scripts/check_status.py
+```
+
+输出第 §7 节就是共现 Top-20 + 突然成对清单。或直接 SQL：
+
+```sql
+-- 最新窗口的 Top-20
+SELECT entity_a, entity_b, cooccur_count, round(cast(pmi as numeric), 2) AS pmi, is_new_pair
+FROM entity_cooccurrence
+WHERE window_end = (SELECT max(window_end) FROM entity_cooccurrence)
+ORDER BY pmi DESC LIMIT 20;
+
+-- 过去 24h 所有"突然成对"
+SELECT window_end, entity_a, entity_b, cooccur_count, pmi
+FROM entity_cooccurrence
+WHERE is_new_pair = TRUE AND window_end >= now() - INTERVAL '24 hours'
+ORDER BY pmi DESC;
+```
+
+#### 数据稳定后调阈值
+
+部署 24~48h 后跑：
+
+```sql
+SELECT
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY pmi) AS p95,
+  percentile_cont(0.99) WITHIN GROUP (ORDER BY pmi) AS p99
+FROM entity_cooccurrence
+WHERE window_end >= now() - INTERVAL '48 hours';
+```
+
+- `p99 < 2.0` → 信号还不够强，可能流量太低；保持默认或调小 `min_cooccur_count` 到 2
+- `p99 ≈ 3.0` → 信号合理；保持默认
+- `p99 > 5.0` → 信号很强；可以把 `min_pmi` 提到 p95 让榜单只剩 Top 5% 强对
+
+#### 看共现相关日志
+
+```bash
+# 一轮成功完成
+grep "cooccur window_end" logs/service.log | tail -10
+
+# 跳过（数据稀疏 / 同窗口已扫）
+grep "cooccur skipped" logs/service.log | tail -10
+
+# 慢速警告（4943 行 baseline 1s 阈值）
+grep "cooccur run_once 慢速" logs/service.log | tail -5
+
+# 写库失败（rollback + 下一轮重试）
+grep "cooccur upsert failed" logs/service.log | tail -5
+
+# 启动时跳过（cooccur_enabled=False）
+grep "CooccurrenceService 未启用" logs/service.log | tail -3
+```
+
+#### 常见问题
+
+| 现象 | 原因 | 解决 |
+|---|---|---|
+| 启动日志没有 `CooccurrenceService 启动` | `cooccur_enabled=False` 或构造失败 | grep `CooccurrenceService 未启用` / `CooccurrenceService 构造失败` |
+| 表里 `is_new_pair=TRUE` 一直 0 对 | 阈值太严 / 数据稀疏 / baseline 已包含历史共现 | 等几天数据攒厚；或把 `cooccur_min_cooccur_count` 临时调到 2 看效果 |
+| 共现榜全是 BTC + ETH 这种巨头 | 候选集没过滤巨头（hotness 黑名单只过滤 hotness 输出，不影响共现） | 这是设计行为——巨头共现可信度的确高；想屏蔽就单独做共现层黑名单（Phase 3） |
+| `cooccur run_once 慢速` 频繁出现 | entity_mentions 涨到 ~50k 行 | 切到 design.md §3.5 的内存方案；当前 4943 行下 < 0.5s |
 
 ---
 

@@ -288,6 +288,89 @@ def main() -> None:
                 "  - ★ 标记表示该实体曾在某份榜单中被判为'新冒头'（baseline=0 + short>=5）"
             )
 
+    # -------- 7. 实体共现网络 Top 20 + 新对 --------
+    _print_section("7. 实体共现网络 Top 20（按 PMI 降序）")
+
+    with db.get_session() as s:
+        # 先看最新一份 entity_cooccurrence 的 window_end
+        latest = s.execute(
+            text("SELECT max(window_end) FROM entity_cooccurrence")
+        ).scalar()
+
+        if latest is None:
+            print(
+                "(还没出过共现快照。可能原因：\n"
+                "  - 还没到第一个 :00/:15/:30/:45 整点\n"
+                "  - 或 cooccur_enabled=False，去 config/_new.py 检查)"
+            )
+        else:
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc)
+            delta = now - latest.astimezone(timezone.utc)
+            mins_ago = int(delta.total_seconds() // 60)
+            print(f"窗口时刻: {latest}")
+            print(f"  距现在: {mins_ago} 分钟前")
+            print()
+
+            rows = s.execute(
+                text(
+                    """
+                    SELECT entity_a, entity_b, cooccur_count,
+                           round(cast(pmi AS numeric), 2) AS pmi,
+                           is_new_pair
+                    FROM entity_cooccurrence
+                    WHERE window_end = :latest
+                    ORDER BY pmi DESC
+                    LIMIT 20
+                    """
+                ),
+                {"latest": latest},
+            ).all()
+            if not rows:
+                print("(空)")
+            else:
+                print(
+                    f"{'#':>3s}  {'A':18s} {'B':18s} {'共现':>5s} "
+                    f"{'PMI':>7s} {'新对':>4s}"
+                )
+                print("-" * 70)
+                for i, r in enumerate(rows, 1):
+                    mark = "★" if r[4] else ""
+                    print(
+                        f"{i:>3d}  {r[0]:18s} {r[1]:18s} {r[2]:>5d} "
+                        f"{float(r[3]):>7.2f} {mark:>4s}"
+                    )
+
+            # 单独列 is_new_pair=True 的"突然成对"对
+            new_rows = s.execute(
+                text(
+                    """
+                    SELECT entity_a, entity_b, cooccur_count,
+                           round(cast(pmi AS numeric), 2)
+                    FROM entity_cooccurrence
+                    WHERE window_end = :latest AND is_new_pair = TRUE
+                    ORDER BY pmi DESC
+                    LIMIT 20
+                    """
+                ),
+                {"latest": latest},
+            ).all()
+            print()
+            if new_rows:
+                print(f"--- ★ 突然成对（is_new_pair=TRUE，新叙事候选）{len(new_rows)} 对 ---")
+                for r in new_rows:
+                    print(f"  {r[0]} + {r[1]}（共现 {r[2]} 次, PMI {float(r[3]):.2f}）")
+            else:
+                print("--- 当前窗口无突然成对（is_new_pair=TRUE 数 = 0）---")
+            print()
+            print(
+                "解读：\n"
+                "  - PMI 高 + cooccur_count 大 → 真共振，是叙事候选最强信号\n"
+                "  - ★ 标记 = 过去 7 天从未一起出现，现在 24h 内 ≥3 次共现\n"
+                "  - 想调阈值看 docs/operations_guide.md §6.4 共现网络调参"
+            )
+
     print()
     print("=" * 70)
     print(" 提示")

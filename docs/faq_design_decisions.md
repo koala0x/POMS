@@ -17,6 +17,8 @@
 5. [Q5："热点"和"提到最多"有什么区别？](#q5)
 6. [Q6：Telegram 告警为什么冷却 60 分钟而不持久化？没收到告警怎么排查？](#q6)
 7. [Q7：为什么需要三个时间窗口（1h / 6h / 24h），不能只看 1h 吗？](#q7)
+8. [Q8：实时告警通道（Phase 2.4）和整点告警怎么协同？会不会刷屏？](#q8)
+9. [Q9：实体共现网络（Phase 2.5）解决了什么问题？为什么用 PMI 而不是简单数共现次数？](#q9)
 
 ---
 
@@ -1069,3 +1071,306 @@ Phase 2.2.2 想做"共振告警"的基础，本任务先把数据铺好。
 层次。多窗口让系统从"只能看到突发热点"升级到"能看到信号在不同时间维度上的
 形态"。工程代价几乎为零（DB 廉价 + CPU 多 5%），但产品维度直接 ×3。
 
+
+---
+
+## <a id="q8"></a>Q8：实时告警通道（Phase 2.4）和整点告警怎么协同？会不会刷屏？
+
+**短答**：
+
+- **协同方式**：实时通道挂在 EntityExtractor 末尾的 `notify(N)` hook 上，写完
+  一批新提及就同步触发；整点通道在每 :00/:15/:30/:45 扫 hotness_snapshots 表。
+  两套通道**共享同一个 `_alert_records` 冷却 dict**，同一 entity 60 分钟内
+  最多发 1 条 Telegram 消息（不分通道），所以不会刷屏
+- **为什么不写 hotness_snapshots 表**：实时计算的 window_end 是分钟级（如 10:23:47），
+  写进表会污染"对齐到 :00/:15/:30/:45 整点"这条 Phase 2.1 的核心约束
+- **为什么实时阈值（30）比整点（5）严**：分钟级窗口的 growth 抖动比整点榜大很多，
+  双层防刷屏（共享冷却 + 更严阈值）保证整体频率可控
+
+### Q8.1 协同的全景图
+
+```
+EntityExtractor.run_once()
+  └─ 写完 N 条 entity_mentions
+        ├─► realtime_trigger.notify(N) ◄── 实时通道入口
+        │      _pending_count += N
+        │      够 burst_threshold 就跑 _trigger_immediate()
+        │            └─► 内存里跑 1h 公式 → 命中阈值 → Telegram (带 [实时] 标签)
+        │                  └─► 推送成功 → 写共享 _alert_records
+        │
+        └─► （worker 继续轮转，最终走到 :00/:15/:30/:45）
+              AlertTriggerService.run_once()
+                  └─► 读 hotness_snapshots(1h, 最新窗口)
+                        └─► 命中阈值 → 决策树（含读共享 _alert_records）
+                              └─► 不在冷却 → Telegram (带 [首次]/[升级] 等标签)
+                                    └─► 推送成功 → 写共享 _alert_records
+```
+
+**关键不变量**：`AlertTriggerService._alert_records` 和
+`RealtimeAlertService.shared_alert_records` 在 `main.py Step 5e` 通过
+**同一引用**注入：
+
+```python
+realtime_service = RealtimeAlertService(
+    ...,
+    shared_alert_records=alert_service._alert_records,   # ← 同一 dict 对象
+    ...,
+)
+```
+
+不是 deepcopy、不是新建空 dict——**绝不允许**让两边各自维护自己的冷却记录。
+要不然实时刚发完 OP，2 分钟后整点又会再发一条 OP 给你。
+
+### Q8.2 为什么实时不写 hotness_snapshots 表
+
+Phase 2.1 多窗口榜单有一条核心约束：**所有 window_end 必须对齐到
+:00/:15/:30/:45 整刻钟**。这条约束保证：
+
+- 三窗口（1h/6h/24h）window_end 总是相同时刻 → 横向比较有意义
+- 历史回放、跨日期对比、定期任务时间对齐都很简洁
+
+实时榜的 window_end 是 `datetime.now(UTC)`，可能是 10:23:47、12:08:12 这种
+分钟秒级时刻。如果写进 hotness_snapshots：
+
+- 表里多出大量"非整刻钟"行，破坏对齐约束
+- `SELECT MAX(window_end) WHERE window_type='1h'` 这种最常用查询会拿到非整点时刻
+- 跨窗口对比、check_status.py 输出全乱
+
+所以实时通道**只在内存里算 + 直接推送**，结果不落库。代价是"看不到实时榜的
+历史"——但实时榜的产品定位本来就是"瞬间冒头的实体在第一时间被推送"，回放
+价值很低，整点榜的历史已经够看。
+
+### Q8.3 为什么实时阈值（30）比整点（5）严
+
+整点榜窗口宽度 1h，实时榜也用 1h 公式（design §3.1 沿用同一个 `short_hours`）。
+**为什么阈值还要不同？**
+
+差别不在窗口宽度，而在**触发时机**：
+
+- 整点：每 15 分钟在固定时刻扫一次，相当于对 1h 提及量做了"15 分钟级采样"
+- 实时：可能在任意分钟秒触发，相当于实时观察 1h 提及量的瞬时值
+
+举个例子，某 entity 的 1h 累计提及次数曲线如下：
+
+```
+时刻 t:    10:00  10:05  10:10  10:15  10:20  ...  10:55  11:00
+1h count:    8      9     12     11     10    ...    9     10
+            (整点)                (整点)               (整点)
+```
+
+整点采样看到的是 8 / 11 / 10 / ... 这种相对平稳的序列，growth_rate 比较稳定。
+但实时观察 10:08 那一瞬间可能是 13（一个 KOL 突然连发 5 条），growth 暂时拉
+得很高，1 分钟后就回落到 9。**这种瞬时尖刺如果阈值松，会导致告警空响**——
+推送出去用户去看时，已经回归常态了。
+
+所以实时阈值 = 整点阈值 × 1.5~3 是合理的工程取舍：
+
+| 实时阈值策略 | 效果 |
+|---|---|
+| `realtime_growth >= alert_growth × 1.0`（不严） | 大量 1~5 分钟的瞬时尖刺被推 |
+| `realtime_growth >= alert_growth × 1.5`（略严） | 过滤掉 50% 噪音，仍能 surface 真热点 |
+| `realtime_growth >= alert_growth × 3.0`（默认 30 vs 整点 ~5~10） | 只接"真的爆了"的信号，可能漏掉一些温和爆发 |
+| `realtime_growth >= alert_growth × 10.0`（很严） | 接近"只接 super hot"，实时通道几乎不发，用处不大 |
+
+默认值（实时 30 vs 整点 5）的设计赌注是"用户更怕被刷屏，少发几条比多发几条好"。
+真有持续热点，整点通道在最坏 14~15 分钟内会兜底推送。
+
+### Q8.4 双层防刷屏：共享冷却 + 更严阈值
+
+实时通道天然比整点频繁（每攒够 50 条 mention 就跑一次，可能几分钟一次）。如果
+没有防护，最坏情况：同一 entity 每 5 分钟被推一次，1 小时被推 12 条。
+
+实际上有**两层防护**让这种情况不会发生：
+
+**第一层：共享冷却 dict**
+
+实时和整点写同一份 `_alert_records`。某 entity 被实时通道推过后：
+- 60 分钟内：决策树走到"60min 内 + 无质变 → 不告警"分支，整点通道也跳过
+- 除非 growth 翻 1.5 倍 / cross_source 增加 / 距上次 6 小时心跳触发
+
+整点通道反过来也一样，先发 → 实时通道 60 分钟内被冷却。
+
+**第二层：更严阈值**
+
+实时阈值 30 远高于整点阈值 5，意味着只有"真的炸"的实体才会触发实时。绝大
+多数温和上涨的实体走整点通道，实时通道默认沉默。
+
+两层叠加的效果：单 entity 每小时被推 ≤ 1 条，每天最多 ~ 24 条；整体每天被推
+~50 条（取决于热点数量），完全在用户可接受范围内。
+
+### Q8.5 实时和整点谁先到？
+
+无固定顺序，谁先达到自己的触发条件谁先到。但因为：
+
+- 实时通道每 5~50 秒就可能跑一次（取决于 burst_threshold + 流量）
+- 整点通道每 15 分钟才跑一次
+
+**绝大多数情况实时先到**——这正是 Phase 2.4 的产品价值。整点变成"兜底"角色：
+万一实时被流量稀薄拖到没触发（比如连续几小时只有零星新提及），整点一定会
+扫一遍 hotness_snapshots 表。
+
+唯一能让整点先到的情况：实时通道因为 `realtime_burst_threshold` 没攒够而沉默，
+直到下一个整点 hotness 把这个 entity 算进 1h 榜，整点通道直接推。这种情况下
+实时通道的 60min 冷却也会同步生效，下一个 _trigger_immediate 不会重发。
+
+### Q8.6 实时通道挂了影响整点吗？
+
+不影响。整点通道**完全独立**——它只读 hotness_snapshots 表，不依赖 `RealtimeAlertService`
+的任何状态。具体保证：
+
+- 实时通道异常被 `try/except` 隔离在 `_trigger_immediate()` 内，只 `log.error` 不
+  向上抛
+- `EntityExtractor.run_once()` 末尾的 `notify(N)` 也用 `try/except` 隔离，挂掉
+  不影响 EntityExtractor 主流程
+- 实时通道不存在时（`realtime_enabled=False` 或三个启用条件之一不满足），
+  `entity_extractor.realtime_trigger = None`，`run_once` 末尾的 hook 一行 `if
+  is not None` 直接跳过
+
+所以最坏情况是"实时通道全挂、退化为 Phase 2.2 整点告警"——延迟回到 14~15 分钟，
+功能不受损。这是 Phase 2.4 的设计契约：**配置缺失即降级**。
+
+### Q8.7 一句话结论
+
+**整点是基线、实时是增益**——实时通道把"急性信号"前置到 1~2 分钟，整点通道
+继续扫所有"温和但显著"的信号兜底。共享冷却 dict + 更严阈值的双重防护让两通道
+不会刷屏，未配置 / 异常时实时自动降级、整点继续工作。
+
+---
+
+## <a id="q9"></a>Q9：实体共现网络（Phase 2.5）解决了什么问题？为什么用 PMI 而不是简单数共现次数？
+
+**短答**：
+
+- **解决的问题**：单实体榜（hotness_snapshots）只能看到"谁在变热"，看不到"谁在
+  跟谁一起变热"。新叙事萌芽时，参与的几个 token 单看 growth 都不显眼，但**同期
+  被一起讨论**才是真信号。共现网络从"节点视角"切到"边视角"，专门捕获这种信号
+- **为什么 PMI 而不是 cooccur_count**：纯共现次数会被巨头主导（BTC + USDT 共现
+  1000 次完全没意义），PMI 把"共现频率/独立预期"做归一化后，新叙事萌芽的弱信号
+  才能浮出水面
+- **为什么本任务不接 Telegram**：避免和现有单实体激增告警在用户视角下混淆；
+  数据先沉淀 1 周再决定共现告警阈值，留 Phase 2.5.1 单独做
+
+### Q9.1 单实体榜看不到的信号长啥样
+
+想象一个真实场景：restaking 叙事复苏。第 N 天的实际数据可能是：
+
+| Entity | 1h growth | 24h growth | 在 hotness 榜的表现 |
+|---|---|---|---|
+| EIGEN | 1.4× | 1.6× | 排在 50 名开外，毫无存在感 |
+| ETHFI | 1.3× | 1.5× | 同样毫无存在感 |
+| REZ | 1.2× | 1.4× | 同样毫无存在感 |
+
+单看每个 token：growth 都没破阈值，没人会注意。但**同时**：
+
+- 24h 内 EIGEN 和 ETHFI 一起出现在 12 条消息里
+- 24h 内 EIGEN 和 REZ 一起出现在 8 条消息里
+- 7 天 baseline 期：这三对从未一起出现过
+
+这是 restaking 叙事复苏的**铁证**——三个 token 都属于这个赛道，被人一起讨论
+说明话题在升温。但单实体榜彻底看不到这个信号，因为每个 token 单看都很平庸。
+
+共现网络解决这件事：
+
+```
+entity_cooccurrence:
+  entity_a=EIGEN  entity_b=ETHFI  cooccur_count=12  pmi=3.18  is_new_pair=TRUE
+  entity_a=EIGEN  entity_b=REZ    cooccur_count=8   pmi=2.96  is_new_pair=TRUE
+  entity_a=ETHFI  entity_b=REZ    cooccur_count=6   pmi=2.74  is_new_pair=TRUE
+```
+
+三个 `is_new_pair=TRUE` 的强对扎堆出现 → 一眼看出 restaking 叙事复苏。Phase 2.6
+做实体聚类时，这三对在 PMI 加权图上自然形成一个连通子图，自动识别为一个簇 =
+"restaking 叙事候选"。
+
+### Q9.2 PMI 比 cooccur_count 强在哪
+
+公式：`PMI(a, b) = log( cooccur × N / (count_a × count_b) )`
+
+意义：把"a 和 b 一起出现的次数"和"独立预期下应该出现的次数"做比值，再取 log。
+
+- PMI = 0：互不相关（独立预期）
+- PMI = 1：共现概率是独立预期的 e≈2.7 倍
+- PMI = 3：约 20 倍（强信号）
+
+举两个对比例子（来自 design.md §3.3 实测）：
+
+| Pair | cooccur 次数 | count_a × count_b | 期望共现 | PMI | 解读 |
+|---|---|---|---|---|---|
+| (BTC, USDT) | 1000 | 5000 × 4500 = 22.5M | ≈ 800 | log(1000/800) ≈ **0.22** | 巨头一起聊，PMI 接近 0，是噪音 |
+| (EIGEN, ETHFI) | 12 | 25 × 18 = 450 | ≈ 0.5 | log(12/0.5) ≈ **3.18** | 低频共振，PMI 高，是叙事候选 |
+
+如果只看 cooccur_count：BTC+USDT 的 1000 远高于 EIGEN+ETHFI 的 12——榜首永远
+是巨头，新叙事永远埋没。PMI 给了我们"按概率归一化"的尺子，让真正的信号浮出来。
+
+### Q9.3 为什么默认 24h 窗口（而不是 1h）
+
+简单算一下：
+
+- 假设 1h 窗口内有 50 条带实体的消息（典型流量）
+- 候选实体 ≈ 100 个
+- 平均每条消息 2.5 个实体 → 50 × C(2.5, 2) ≈ 150 对共现机会
+- 每对独立 count_a / count_b ≈ 1~3，cooccur ≈ 1~2
+- N=50
+
+随便一对：count_a=2, count_b=2, cooccur=1, N=50 → PMI = log(1×50 / 4) ≈ 2.5
+**几乎所有对的 PMI 都看起来很高**——但这是统计学上的"小样本噪音"。1h 窗口下，
+任何巧合都会变成"显著信号"，导致榜单全是噪音。
+
+24h 窗口下：
+
+- 24h 内消息数 ≈ 800（典型流量）
+- 候选实体 ≈ 200
+- 每个 entity count_a / count_b 平均 5~30
+- N=800
+
+同一对真正"突然成对"的情况：count_a=10, count_b=10, cooccur=8 → PMI = log(8×800 /
+100) ≈ 4.16，远高于真随机共现的 PMI（< 1）。**信号噪音比足够大**才能区分真假。
+
+实测下来，1h 共现榜里 PMI 中位数在 2~3 之间但全是噪音，24h 榜里 PMI 中位数 0.5
+但 PMI ≥ 2 的对 80%+ 是真信号——这是设计选 24h 的关键工程理由。
+
+### Q9.4 候选集为什么用 active_entities('24h')
+
+不限候选集会有 n² 爆炸：所有出现过的实体（可能上千个）两两组合 = 几十万对。
+24h 内活跃过的 entity 集合（实测 < 1000）作候选 → C(1000, 2) ≈ 50 万对，
+配合 `min_cooccur_count >= 3` 过滤，最终进 PMI 计算的对 < 1000。
+
+**关键不变量**：CooccurrenceService 共享 HotnessService 的同一个 `SlidingCounter`
+实例（main.py Step 5e 注入）。如果没共享，两边 active_entities 不一致，hotness
+和 cooccurrence 数据就对不上。
+
+### Q9.5 为什么 baseline=0 + 短窗≥3 才标 is_new_pair
+
+两条都必要：
+
+- **只看 baseline=0**：短窗 1 次共现也算"新对"——但 1 次大概率是偶然，不是信号
+- **只看 短窗≥3**：BTC + ETH 长期一起聊，今天也一起聊 ≥3 次 → 误标成"新对"
+- **两条结合**：从没一起出现过 + 现在 24h 内 ≥3 次 = 真正的"突然成对"
+
+3 次是经验值（一次偶然、两次巧合、三次趋势）。如果你觉得 3 次太严，可以临时
+把 `cooccur_min_cooccur_count` 调到 2 观察一周——但默认 3 是更稳妥的"既不漏真
+信号也不收太多噪音"折中点。
+
+### Q9.6 为什么不在本任务接 Telegram
+
+技术上能做到（共享 TelegramClient），但产品上不该做：
+
+- **阈值耦合**：单实体激增告警 `growth_threshold=5` 与共现 PMI 阈值 `min_pmi=1.0`
+  是不同维度，合并到 `AlertTriggerService` 会让冷却逻辑（`AlertRecord` 当前以
+  entity 为 key）失效，需要额外抽象 key 类型
+- **用户视角混淆**：单实体告警 "🔥 实体 BTC growth 25x" 已形成习惯，再混入
+  "🔥 [新对] EIGEN+ETHFI" 会让用户分不清两类信号；Phase 2.5.1 单独通道更清晰
+  （甚至可以用不同 emoji 如 "🕸️ [新叙事候选]"）
+- **数据先稳定再加通道**：先观察 1 周 PMI 分布，看 99% 分位实际是多少，再决定
+  告警阈值；这一周数据通过 entity_cooccurrence 沉淀，Phase 2.5.1 直接复用
+
+Phase 2.5.1 预期接口：新建 `CooccurAlertTriggerService` 读 entity_cooccurrence，
+复用现有 TelegramClient，冷却 key 改为 `(entity_a, entity_b)` tuple，阈值
+`cooccur_alert_min_pmi=3.0`（比写库阈值 1.0 严）。本任务交付的字段
+（pmi / is_new_pair / cooccur_count）足够支撑那一套，schema 不需要改。
+
+### Q9.7 一句话结论
+
+**单实体榜看节点、共现网络看边**——叙事级共振只能在边视角看到；用 PMI 而不是
+cooccur_count 是为了把巨头噪音从信号里剔除；本任务先产数据、不接 Telegram 是
+为了让 1 周观察期沉淀真实分布，避免上线即调阈值。

@@ -375,6 +375,49 @@ def main() -> None:
 
     new_services = [normalizer_service, entity_extractor, *hotness_services]
 
+    # =============================================================================
+    # Step 5d-pre：CooccurrenceService（Phase 2.5 实体共现网络，design.md §3.7）
+    # -----------------------------------------------------------------------------
+    # 在 hotness_services 之后构造（共享 mentions_repo / sliding_counter 关键不变量），
+    # 但放在 AlertTriggerService（Step 5d）之前——本任务**只产数据不接 Telegram**，
+    # 调度顺序对告警逻辑无影响（alert 只读 hotness_snapshots(1h)）。
+    #
+    # 启用条件：settings.cooccur_enabled=True（默认 True）。任一构造失败被
+    # try/except ValueError 兜底（__post_init__ 校验失败），不阻塞启动。
+    # =============================================================================
+    if settings.cooccur_enabled:
+        from db.repositories.cooccurrence_repo import CooccurrenceRepo
+        from services.l3_cooccurrence import CooccurrenceService
+
+        try:
+            cooccur_service = CooccurrenceService(
+                db=db,
+                mentions_repo=mentions_repo,
+                cooccur_repo=CooccurrenceRepo(),
+                sliding_counter=sliding_counter,
+                window_type=settings.cooccur_window_type,
+                top_pairs=settings.cooccur_top_pairs,
+                min_cooccur_count=settings.cooccur_min_cooccur_count,
+                min_pmi=settings.cooccur_min_pmi,
+                min_window_msgs=settings.cooccur_min_window_msgs,
+                timezone=settings.timezone,
+            )
+            new_services.append(cooccur_service)
+            logger.info(
+                "CooccurrenceService 启动:window={} top_pairs={} min_pmi={} "
+                "min_cooccur={}",
+                settings.cooccur_window_type,
+                settings.cooccur_top_pairs,
+                settings.cooccur_min_pmi,
+                settings.cooccur_min_cooccur_count,
+            )
+        except ValueError as e:
+            # __post_init__ 校验失败（window_type 拼错 / min_cooccur_count 非法）
+            # 不阻塞启动，hotness/alert 继续工作
+            logger.error("CooccurrenceService 构造失败已跳过：{}", e)
+    else:
+        logger.info("CooccurrenceService 未启用（cooccur_enabled=False）")
+
     # Step 5d：AlertTriggerService（Phase 2 Task 2.2 — Telegram 实时告警）
     # ---------------------------------------------------------------------
     # 仅当 telegram_bot_token + telegram_chat_id 都非空才构造 Service。

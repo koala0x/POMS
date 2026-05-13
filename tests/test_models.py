@@ -23,7 +23,7 @@ from db.models import (
 
 
 def test_tables_registered() -> None:
-    """八张业务表都应注册在 metadata 上（Phase 1 新增三张）。"""
+    """九张业务表都应注册在 metadata 上（Phase 2.5 在 Phase 1 三张之上再加一张）。"""
     expected = {
         # 原有 5 张
         "twitter_posts",
@@ -35,6 +35,8 @@ def test_tables_registered() -> None:
         "normalized_messages",
         "entity_mentions",
         "hotness_snapshots",
+        # Phase 2.5 新增：L3 实体共现网络
+        "entity_cooccurrence",
     }
     assert expected == set(Base.metadata.tables.keys())
 

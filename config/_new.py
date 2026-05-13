@@ -159,3 +159,37 @@ class NewPipelineSettings:
     hotness_24h_exclude_entities: tuple[str, ...] = (
         "USDT", "USDC", "DAI",
     )
+
+    # ==========================================================================
+    # L3 Cooccurrence Network（Phase 2.5 实体共现网络，新增）
+    # --------------------------------------------------------------------------
+    # 在 entity_mentions 上做实体两两共现统计，用 PMI（Pointwise Mutual Information）
+    # 衡量"是不是不寻常的一起出现"，写入新表 entity_cooccurrence。
+    #
+    # 本任务**只产数据，不接 Telegram**——告警通道留 Phase 2.5.1 单独做，
+    # 避免和 AlertTriggerService 在用户视角下混淆（详见 design.md §3.8）。
+    # ==========================================================================
+
+    # 是否启用 L3 共现网络。False → main.py 跳过 service 构造，零运行时开销
+    cooccur_enabled: bool = True
+
+    # 共现统计窗口：1h 共现噪音太大不实用（窗口内消息少导致随机共现频繁），
+    # 24h 才是稳定信号源（design.md §9 决策表）
+    cooccur_window_type: str = "24h"
+
+    # 每窗口写 Top-K pair（按 PMI 降序）
+    # 100 是经验值——足够覆盖主流叙事的常见组合 + Top-10 的"突然成对"信号
+    cooccur_top_pairs: int = 100
+
+    # 短窗共现下限：cooccur_count >= 此值才进入 PMI 评估
+    # 共现 1~2 次属偶然，3 次起算趋势（design.md §3.4 经验值）
+    cooccur_min_cooccur_count: int = 3
+
+    # PMI 下限：≥ 此值才写库
+    # PMI=1.0 ≈ "共现概率是独立预期的 e≈2.7 倍"，是 surface 新叙事的关键信号
+    # 部署后建议先观察 1 周 entity_cooccurrence.pmi 的 99% 分位再调整
+    cooccur_min_pmi: float = 1.0
+
+    # 窗口消息数下限：< 此值跳过本轮（数据稀疏 PMI 全是噪音）
+    # 50 是经验值；当前流量下 24h 内带 ≥1 实体的消息总数 800+，远超阈值
+    cooccur_min_window_msgs: int = 50

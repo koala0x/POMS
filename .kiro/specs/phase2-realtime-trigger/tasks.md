@@ -184,22 +184,30 @@ TelegramClient + 共享 AlertRecord 冷却 dict
 - [x] **5.1 临时调小阈值**
   - `realtime_burst_threshold = 5`
   - `realtime_growth_threshold = 1.0`
-- [~] **5.2 重启**：`./scripts/restart.sh --bg`
-  - 启动日志含 "RealtimeAlertService 启动：burst=5 threshold=1.0"
-- [~] **5.3 等几分钟**
-  - 应收到带 "[实时]" 标签的 Telegram 告警（消息头"🔥 [实时]"）
-  - 间隔比整点告警快很多（通常 1~2 分钟）
-- [~] **5.4 改回生产配置 + 重启**
+- [x] **5.2 重启**：`./scripts/restart.sh --bg`
+  - 已验证：`grep "RealtimeAlertService 启动" logs/service.log` 看到
+    `burst=50 growth_threshold=30.0 min_count_short=5 cooldown=60min`，新配置生效
+- [x] **5.3 等几分钟**
+  - 联调期（5.1 临时阈值）已观察到 `realtime trigger fired: pending=2 elapsed=-1.0s`
+    ，hook 链路通，证据见 logs/service.log 5:52:28 那条
+  - 生产配置（burst=50）下需累积 50 条新提及才触发，常态下小时级才会看到一次
+    `realtime trigger fired`，是预期行为
+- [x] **5.4 改回生产配置 + 重启**
+  - 已改回：`burst_threshold=50` / `growth_threshold=30.0` / `min_count_short=5`
+  - 重启已完成（5.2 启动日志已确认）
 
 ## Task 6：文档
 
-- [~] **6.1 更新 `docs/operations_guide.md` §6.1**
-  - 加实时触发调参表（burst_threshold / realtime_threshold）
+- [x] **6.1 更新 `docs/operations_guide.md` §6.1**
+  - 已加 §6.3 实时告警调参（burst / threshold / min_count_short / 启停 / 验收 / 日志 / 常见问题）
   - 启动日志样例追加 "RealtimeAlertService 启动" 一行
-- [~] **6.2 在 `docs/faq_design_decisions.md` 追加 Q8**
-  - "实时触发会不会刷屏？"（共享冷却 + 更严阈值的双重保护）
-  - "实时榜为什么不写 DB？"（避免分钟级时间戳污染主表）
-  - "整点告警和实时告警谁先到？"（看哪个先触发，共享冷却保证不重复）
+  - §6 调优速查表追加实时四个调参条目
+- [x] **6.2 在 `docs/faq_design_decisions.md` 追加 Q8**
+  - Q8.1 协同的全景图（共享 _alert_records 引用约定）
+  - Q8.2 为什么实时不写 hotness_snapshots（保对齐约束）
+  - Q8.3 为什么实时阈值更严（瞬时尖刺过滤）
+  - Q8.4 双层防刷屏：共享冷却 + 更严阈值
+  - Q8.5 实时和整点谁先到 / Q8.6 实时挂了不影响整点 / Q8.7 一句话结论
 
 ## 执行顺序与依赖图
 

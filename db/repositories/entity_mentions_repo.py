@@ -14,7 +14,7 @@ from typing import Iterator
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from db.models import EntityMention
 
@@ -112,6 +112,69 @@ class EntityMentionsRepo:
                 EntityMention.entity == entity,
                 EntityMention.ts >= start,
                 EntityMention.ts < end,
+            )
+        )
+        return int(session.scalar(stmt) or 0)
+
+    # -------------------------------------------------------------------
+    # 共现统计聚合（供 CooccurrenceService 用，Phase 2.5 新增）
+    # -------------------------------------------------------------------
+
+    def count_distinct_msgs_since(
+        self,
+        session: Session,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> int:
+        """
+        返回 [since, until) 区间内的独立 msg_id 数量（即"窗口内不同消息总数"）。
+
+        用途：
+        - CooccurrenceService 数据稀疏跳过门槛（< min_window_msgs 时不算）
+        - PMI 公式分母 N（窗口内带至少一个实体的消息总数）
+        """
+        stmt = (
+            select(func.count(func.distinct(EntityMention.msg_id)))
+            .where(
+                EntityMention.ts >= since,
+                EntityMention.ts < until,
+            )
+        )
+        return int(session.scalar(stmt) or 0)
+
+    def count_pair_cooccur(
+        self,
+        session: Session,
+        entity_a: str,
+        entity_b: str,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        """
+        返回 [start, end) 区间内 entity_a 和 entity_b 在同一条消息里出现过的次数。
+
+        实现：SELF JOIN entity_mentions，按 a.msg_id == b.msg_id 配对，
+        过滤 a.entity / b.entity 各自匹配，然后 COUNT(DISTINCT a.msg_id)。
+
+        约定：调用方传 canonical 顺序（entity_a < entity_b 字典序）；
+        但本方法本身**不强制顺序**，只要两个 entity 出现在同一消息就计数。
+
+        用途：
+        - CooccurrenceService._is_new_pair：查 7 天 baseline 期 baseline=0 判定
+        """
+        a = aliased(EntityMention)
+        b = aliased(EntityMention)
+        stmt = (
+            select(func.count(func.distinct(a.msg_id)))
+            .select_from(a)
+            .join(b, a.msg_id == b.msg_id)
+            .where(
+                a.entity == entity_a,
+                b.entity == entity_b,
+                a.ts >= start,
+                a.ts < end,
             )
         )
         return int(session.scalar(stmt) or 0)
