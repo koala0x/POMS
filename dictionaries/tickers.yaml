@@ -27,7 +27,7 @@
 
 BTC:
   type: layer1
-  aliases: [比特币]
+  aliases: [比特币,大饼]
 ETH:
   type: layer1
   aliases: [以太坊, 以太]
@@ -155,10 +155,13 @@ MSFT:
   type: us_stock
 NVDA:
   type: us_stock
+  aliases: [英伟达,Nvidia,老黄]
 AMD:
   type: us_stock
+  aliases: [苏妈]
 META:
   type: us_stock
+  aliases: [扎克伯格,小扎,Facebook]
 GOOG:
   type: us_stock
 AMZN:
@@ -175,7 +178,9 @@ COIN:
 
 USDT:
   type: stablecoin
+  aliases: [稳定币]
 USDC:
   type: stablecoin
+  aliases: [稳定币]
 DAI:
   type: stablecoin
