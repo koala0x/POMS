@@ -540,6 +540,67 @@ def main() -> None:
         else:
             logger.info("RealtimeAlertService 跳过：AlertTriggerService 未启用")
 
+    # =============================================================================
+    # Step 5f：BriefingService（Phase 2.7 LLM 定向简报，design.md §10）
+    # -----------------------------------------------------------------------------
+    # 每 15 分钟整点对齐取最新 1h 榜 Top-N，给 growth >= min_growth 的实体调
+    # OllamaClient 生成 JSON 简报（叙事/催化/资金逻辑/sentiment/confidence），
+    # 写入 entity_briefings 表。
+    #
+    # ★ 调度位置：必须排在所有写库 service（Normalizer / EntityExtractor /
+    # 全部 HotnessService / Cooccur / AlertTrigger）**之后**——LLM 推理慢
+    # （CPU 模式 ~30s/次，Top-5 一轮 ~2.5 分钟），不能阻塞实时管道。
+    #
+    # 启用条件：仅 settings.briefing_enabled=True 才构造（OllamaClient 自带
+    # 优雅降级，连不上 Ollama 时 chat() 抛 RuntimeError，BriefingService 单 entity
+    # try/except 隔离 + log.warning，不影响其它 service）。
+    #
+    # ★ 这是 Phase 1/2.x"零 LLM"硬约束的明确突破——但只在"信号产生后加解释"，
+    # 不让 LLM 反向影响信号产生链路。详见 docs/faq_design_decisions.md Q11。
+    # =============================================================================
+    if settings.briefing_enabled:
+        from db.repositories.briefings_repo import BriefingsRepo
+        from db.repositories.cooccurrence_repo import CooccurrenceRepo
+        from llm.ollama_client import OllamaClient
+        from services.l5_briefing import BriefingService
+        from pathlib import Path as _Path
+
+        ollama_l5 = OllamaClient(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model_level5,
+            timeout_seconds=settings.ollama_timeout_level5,
+        )
+        prompts_dir = _Path(__file__).resolve().parent / "prompts"
+        briefing_service = BriefingService(
+            db=db,
+            hotness_repo=hotness_repo,
+            mentions_repo=mentions_repo,
+            normalized_repo=normalized_repo,
+            briefing_repo=BriefingsRepo(),
+            ollama=ollama_l5,
+            prompt_path=prompts_dir / "level5_briefing.txt",
+            # 共现 hint：如果 cooccur_enabled 已启用就传 repo 让 prompt 带 hint
+            cooccur_repo=(
+                CooccurrenceRepo() if settings.cooccur_enabled else None
+            ),
+            top_n=settings.briefing_top_n,
+            min_growth=settings.briefing_min_growth,
+            evidence_count=settings.briefing_evidence_count,
+            timezone=settings.timezone,
+        )
+        new_services.append(briefing_service)
+        logger.info(
+            "BriefingService 启动：top_n={} min_growth={} evidence_count={} "
+            "model={} cooccur_hint={}",
+            settings.briefing_top_n,
+            settings.briefing_min_growth,
+            settings.briefing_evidence_count,
+            settings.ollama_model_level5,
+            "ON" if settings.cooccur_enabled else "OFF",
+        )
+    else:
+        logger.info("BriefingService 未启用（briefing_enabled=False）")
+
     # Step 7：Jobs 构造时注入 new_services
     # 调度层:level1 / level2 / new_services 共用一个 worker 线程串行触发
     jobs = Jobs(

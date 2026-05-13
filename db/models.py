@@ -26,7 +26,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -484,6 +484,64 @@ class EntityCooccurrence(Base):
     )
 
 
+class EntityBriefing(Base):
+    """
+    L5 LLM 定向简报快照（Phase 2.7 新增）。
+
+    每 15 分钟 BriefingService 触发一次，对 hotness 1h 榜 Top-N 实体调用
+    Ollama 生成结构化 JSON 简报，写入本表。
+    幂等键：(entity, window_end)，ON CONFLICT **DO NOTHING**（不覆盖）——
+    一条窗口快照只生成一次，避免 LLM 输出抖动。
+
+    字段说明：
+      - entity / window_end：与 hotness_snapshots 同步的实体名 + 窗口时刻
+      - narrative：当前归属叙事，如 "Restaking 复苏"，可空（LLM 判断不出时填 NULL）
+      - catalyst：催化事件描述，如 "EigenLayer v2.0 上线"，可空
+      - fund_logic：资金/基本面逻辑，可空
+      - sentiment：bullish / bearish / neutral，可空
+      - confidence：0.0 ~ 1.0 的 LLM 自评置信度，可空
+      - evidence_msg_ids：本次喂给 LLM 的 normalized_messages.id 列表
+                          （审计 LLM 是否在 evidence 之外编造内容的关键证据）
+      - raw_response：LLM 原始 JSON 响应（解析成功后留作审计/回放）
+      - created_at：行写入时间
+
+    与硬约束的关系：本服务**调用 LLM**——这是 Phase 2 路线图里唯一一个
+    明确突破"零 LLM"的子任务。但 LLM 输出**只用于解释**（向后渲染告警消息），
+    **不反向影响信号产生链路**（hotness/cooccur/alert 决策都不读 briefing）。
+    """
+
+    __tablename__ = "entity_briefings"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    entity: Mapped[str] = mapped_column(String(128), nullable=False)
+    window_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    narrative: Mapped[str | None] = mapped_column(Text, nullable=True)
+    catalyst: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fund_logic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sentiment: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evidence_msg_ids: Mapped[list[int]] = mapped_column(
+        ARRAY(BigInteger), nullable=False
+    )
+    raw_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "entity",
+            "window_end",
+            name="uq_entity_briefings_entity_window",
+        ),
+        Index("idx_entity_briefings_window_end", "window_end"),
+    )
+
+
 __all__ = [
     "Base",
     "TwitterPost",
@@ -495,4 +553,5 @@ __all__ = [
     "EntityMention",
     "HotnessSnapshot",
     "EntityCooccurrence",
+    "EntityBriefing",
 ]

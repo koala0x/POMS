@@ -1,5 +1,26 @@
 # Phase 2 · Task 2.6 L4 Embedding 聚类 · Implementation Tasks
 
+> ⏸️ **状态：暂缓（2026-05-14 用户决策）**
+>
+> 暂缓原因：当前数据量太小，embedding 聚类的降噪 ROI 不划算
+> - entity_mentions 总量 4943 条（部署到现在）
+> - 24h 内新增 812 条 / 1h 内新增 ~3 条
+> - 这个量级里能聚成有效簇（≥5 条同义消息）的占比 < 5%
+> - HDBSCAN 跑出来一半会是 noise（被 min_cluster_size 过滤掉）
+> - 600MB 模型下载 + pgvector 扩展安装 + 调 HDBSCAN 玄学参数的成本远超收益
+>
+> 启用门槛（重新评估时机）：
+> - 单日 entity_mentions 新增 ≥ 8000 条（当前 10x），或
+> - 出现"同一事件被多种说法反复 surface"的明显刷屏现象（当前没观察到）
+>
+> 替代方案：直接做 phase2-llm-briefing，让 LLM 借助 phase2-cooccurrence-network
+> 已经写好的共现 hint 给出叙事归纳；信号增强不靠语义聚类，靠共现 + LLM 即可。
+>
+> ⚠️ **不删除本 spec**：保留代码评估 / 设计推演的成果；流量上来后直接重启评估
+> 即可，无需重新写 spec。
+
+# Phase 2 · Task 2.6 L4 Embedding 聚类 · Implementation Tasks
+
 > 终极设计文档 §9 L4 Embedding 聚类的最小实现版。把语义相似的消息**聚成事件簇**，
 > 让"同一件事的不同说法"被识别成同一个事件。是 Phase 1 SimHash 去重的语义升级。
 >

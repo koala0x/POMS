@@ -19,6 +19,7 @@
 7. [Q7：为什么需要三个时间窗口（1h / 6h / 24h），不能只看 1h 吗？](#q7)
 8. [Q8：实时告警通道（Phase 2.4）和整点告警怎么协同？会不会刷屏？](#q8)
 9. [Q9：实体共现网络（Phase 2.5）解决了什么问题？为什么用 PMI 而不是简单数共现次数？](#q9)
+10. [Q11：为什么 Phase 2.7 突破了"零 LLM"硬约束？LLM 简报怎么用？](#q11)
 
 ---
 
@@ -1374,3 +1375,160 @@ Phase 2.5.1 预期接口：新建 `CooccurAlertTriggerService` 读 entity_cooccu
 **单实体榜看节点、共现网络看边**——叙事级共振只能在边视角看到；用 PMI 而不是
 cooccur_count 是为了把巨头噪音从信号里剔除；本任务先产数据、不接 Telegram 是
 为了让 1 周观察期沉淀真实分布，避免上线即调阈值。
+
+---
+
+## <a id="q11"></a>Q11：为什么 Phase 2.7 突破了"零 LLM"硬约束？LLM 简报怎么用？
+
+> 编号跳过 Q10：Q10 原本规划给 phase2-embedding-clustering（已暂缓）。
+> 等流量起来重新启用那个 spec 时再补 Q10，本任务直接用 Q11 占位。
+
+**短答**：
+
+- **被突破的约束**：Phase 1 / 2.x 的"信号产生链路绝不被 LLM 幻觉污染"
+- **为什么本任务可以突破**：因为本任务的 LLM 调用**只在信号产生后加解释**，
+  不反向影响 hotness 公式 / 共现统计 / 告警冷却 / 任何信号产生链路
+- **为什么不直接用 LLM 替代 hotness**：稳定性（公式可重放、可单测，LLM 不行）+
+  ROI（hotness 计算 50ms / 简报 30s，量级差 600 倍）+ 噪音抑制（LLM 在低质量
+  消息上会编造）
+- **怎么用**：每 15 分钟自动给 Top-N 实体生成 JSON 简报，写入 `entity_briefings`，
+  用 SQL 看 narrative / catalyst 等字段，回答"为什么 EIGEN 突然热了"
+
+### Q11.1 重新定义硬约束
+
+Phase 1 起草时的硬约束原文（见 `crypto-narrative-radar` spec）：
+
+> "新链路严格不 import `llm/ollama_client.py`"
+
+但这条约束的本质目的是**"信号产生链路稳定可靠，不被 LLM 幻觉污染"**——
+hotness 公式、SimHash 去重、共现 PMI、聚类相似度全是确定性算法，可重放、
+可回归、可单测。**这条本质目的从未改变**。
+
+Phase 2.7 把硬约束**重定义**为：
+
+> "**信号产生链路**零 LLM"
+
+具体来说：
+
+| 链路 | 是否调 LLM | 是否被 briefing 反向影响 |
+|---|---|---|
+| HotnessService 公式 | ❌ | ❌ |
+| 共现网络 PMI（Phase 2.5）| ❌ | ❌ |
+| 告警冷却 dict（Phase 2.2/2.4）| ❌ | ❌ |
+| AlertTrigger 决策树 | ❌ | ❌（Task 6 即便启用也只是消息渲染时附加显示）|
+| **BriefingService（本任务）** | ✅ | — |
+
+也就是说，**LLM 是"叶子节点"**——只输出，不被读取作为其他决策依据。
+这与老链路 `Level1Service` / `Level2Service` 调 Ollama 做摘要的设计原则一致。
+
+### Q11.2 为什么不让 LLM 直接做 hotness 决策
+
+最诱人的偷懒方案：把 normalized_messages 全喂给 LLM 让它直接输出 Top-K 热点。
+
+**为什么不这么做**——三个工程理由：
+
+**1. 稳定性**
+
+| 维度 | hotness 公式 | LLM 决策 |
+|---|---|---|
+| 同一份输入两次跑 | 结果完全一致 | 结果不同（temperature > 0） |
+| 单元测试 | 12 个用例覆盖各分支 | 没法精确测 |
+| 调试 / 复现 bug | 看 SQL 直接定位 | 只能问"LLM 这次为什么这么想" |
+| 回归测试 | 134 → 168 passed 持续守护 | 每次 prompt 改动都得重跑全量样本人工评估 |
+
+把信号产生交给 LLM，等于把"为什么 EIGEN 排第 3 不是第 1"这种问题变成**永远
+回答不清楚**——LLM 没法解释自己的决策路径。hotness 公式可以一行一行算出来。
+
+**2. ROI**
+
+| 操作 | 耗时 | 单实体每天调用次数 |
+|---|---|---|
+| hotness 公式（一次榜单算 100 个实体）| ~50ms | 96 次（每 15 分钟）|
+| LLM 单次推理 | ~30s（CPU）/ ~3s（GPU）| 同上 |
+
+差 600 倍。把 LLM 放在信号产生链路里，CPU 推理直接拖死 worker；即使是 GPU，
+每 15 分钟全量算 LLM 也是浪费——hotness 公式已经把候选集筛到 Top-100 了，
+LLM 只需要给真正值得关注的 Top-N 加解释。
+
+**3. 噪音抑制**
+
+低质量消息（"今天好热"、"睡了"）放进去：
+
+- hotness 公式：消息没含已知实体 → 不进 entity_mentions → 自然不影响榜单
+- LLM 决策：可能凭空编造一个 `narrative='天气'`，污染整个榜单
+
+确定性公式天然过滤噪音；LLM 在低质量样本上**会胡说**。
+
+### Q11.3 为什么 LLM 简报本身仍然有价值
+
+既然 LLM 不能进信号链路，为什么还要做这一层？
+
+**因为最后一公里的解释成本**：用户能看到 hotness 榜上 EIGEN 排第 1 growth=20×，
+但**为什么 EIGEN 突然热**这一条信息当前系统完全无法回答。要回答它今天唯一的
+办法是手动去推特搜，30 秒能解决但有摩擦。
+
+LLM 简报把这件事**自动化**——值得 brief 的 Top-N 实体，每 15 分钟生成一份简报：
+
+```json
+{
+  "narrative": "Restaking 复苏",
+  "catalyst": "EigenLayer 主网升级 v2.0 上线",
+  "fund_logic": "Restaking 赛道 TVL 反弹至 200 亿美元",
+  "sentiment": "bullish",
+  "confidence": 0.85
+}
+```
+
+睡觉时手机推送 Telegram 告警附带这一段（Task 6 可选未来加），就不用再起来推特搜。
+
+### Q11.4 LLM 输出的 narrative 不准确怎么办
+
+三种典型错误 + 应对：
+
+| 错误类型 | 例子 | 应对 |
+|---|---|---|
+| **幻觉**：编造 evidence 之外的事件 | evidence 没提"主网升级"，narrative 说"主网升级" | 通过 `evidence_msg_ids` 字段审计：`SELECT raw_response, evidence_msg_ids FROM entity_briefings WHERE entity='X'`，看 narrative 提到的事件是否真在那 N 条 evidence 里 |
+| **过度泛化**：narrative 只填 "看涨" | 没给出具体叙事归属 | 调 prompt（`prompts/level5_briefing.txt`）强化具体性约束 |
+| **JSON 解析失败**：响应混了 markdown 包裹 | ```json{...}``` | 服务自带剥 markdown 兜底逻辑（`_parse_json` 处理）；解析失败的 entity 不写表，下一轮 window 重试 |
+
+幻觉是最严重的——但 evidence_msg_ids 字段就是为它而设计的。审计成本很低，
+随机抽 5~10 条人工核对即可。
+
+### Q11.5 为什么 evidence 是随机抽样不按时间排
+
+`_select_evidence` 用 `ORDER BY engagement DESC, random()`：
+
+- 第一档：engagement 高的优先（KOL / 大账号 / 高互动）—— 但 Phase 2 当前
+  `engagement` 字段三源全为 0（抓取层未升级），所以这档实际不生效
+- 第二档：random() 兜底打散 —— 当前真实路径
+
+**为什么不按时间倒序**："最近的消息"未必最有信号——一个 KOL 在 30 分钟前发的
+深度分析比刚发的"emoji+数字"水推有用得多。等 Phase 3 抓取层补 engagement 字段后，
+随机抽样会自动让位给"高互动优先"，无需改代码。
+
+未来如果 Phase 2.6 embedding 聚类启用了，evidence 会按"每个 cluster 取代表"
+策略，避免 LLM 看到 10 条几乎相同的复读消息浪费上下文（`_select_evidence`
+预留了扩展点）。
+
+### Q11.6 何时开 / 何时关 briefing
+
+**开**：
+
+- 想自动化"看到 hotness 榜 → 推特搜"这条手动流程
+- 接受 ~2.5 分钟一轮的 worker 延迟（CPU 推理）
+- 接受偶尔的 LLM 幻觉，并能用 evidence_msg_ids 审计
+
+**关**：
+
+- 上游消息流量极低（24h < 100 条）—— LLM 看不到足够 evidence 容易瞎说
+- Ollama 服务不稳定 / 经常宕机 —— 调用失败率高、日志噪音大
+- 临时调试 hotness 链路 —— 关掉 briefing 可以节省 worker 时间专注复现 bug
+
+关闭只需 `config/_new.py` 改 `briefing_enabled = False` + 重启。
+
+### Q11.7 一句话结论
+
+**信号产生 ≠ 信号解释**——hotness 公式 / 共现 PMI 是稳定的信号产生器，LLM 简报
+是它们之上的解释层。Phase 1/2.x 的"零 LLM"硬约束本质上保护的是信号产生链路，
+而不是禁止任何 LLM 接触系统。Phase 2.7 把这条约束精确化为"信号产生链路零 LLM"，
+让 briefing 成为合规的"叶子节点"——只生成、不被读。

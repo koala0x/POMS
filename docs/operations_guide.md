@@ -103,6 +103,14 @@ AlertTriggerService 启动：growth_threshold=20.0 cooldown=60min escalation×1.
 > 这是 L3 实体共现网络服务，每 15 分钟扫一次 entity_mentions 算两两共现 + PMI，
 > 写入新表 entity_cooccurrence，详见 §6.4。
 > `cooccur_enabled=False` 时该服务不构造，hotness/alert 主流程不受影响。
+>
+> **Phase 2.7 新增**：在 cooccur 之后还会出现一行
+> `BriefingService 启动：top_n=5 min_growth=5.0 evidence_count=10 model=qwen3:8b cooccur_hint=ON`，
+> 这是 L5 LLM 定向简报服务，每 15 分钟整点取最新 1h 榜 Top-N 实体调 Ollama
+> 生成 JSON 简报（叙事/催化/资金逻辑/情绪/置信度），写入新表 entity_briefings，
+> 详见 §6.5。`briefing_enabled=False` 时该服务不构造，**整个 LLM 链路是
+> Phase 2.7 之前所有任务硬约束"零 LLM"的明确突破**——但只在信号产生后加解释，
+> 不反向影响 hotness/cooccur/alert 决策（详见 docs/faq_design_decisions.md Q11）。
 
 后台跑：
 
@@ -378,6 +386,10 @@ EOF
 | **共现 PMI 阈值** | `cooccur_min_pmi: 1.0 → 2.0`（更严）/ `→ 0.5`（更松） | PMI<阈值的对不写库；≥1.0 ≈ 共现概率是独立预期的 e≈2.7 倍 |
 | **共现最少次数** | `cooccur_min_cooccur_count: 3 → 5` | 短窗共现 <阈值 直接过滤；3 次起算趋势 |
 | **共现榜单宽度** | `cooccur_top_pairs: 100 → 50` 或 `→ 200` | 每 quarter 写 Top-K pair |
+| **关闭 LLM 简报** | `briefing_enabled: True → False` | 关掉 L5 LLM 简报；信号产生链路不受影响 |
+| **简报触发阈值** | `briefing_min_growth: 5.0 → 10.0`（更严） | growth_rate < 阈值不调 LLM；CPU 推理慢，调高减少耗时 |
+| **简报覆盖广度** | `briefing_top_n: 5 → 3`（更窄）/ `→ 10`（更广） | 每 quarter 给 1h 榜 Top-N 实体生成简报；Top-5 实测 ~2.5 分钟一轮 |
+| **换 LLM 模型** | `ollama_model_level5: "qwen3:8b" → "qwen3:30b"` | 30b 质量更高但 CPU 推理 90s+，单轮 7.5 分钟，会拖累 worker 节奏 |
 
 **注意**：改 DB 配置（`db_host` / `db_port` 等）后重启前先 `psql` 测一下新地址
 通不通，免得进程起来又挂。
@@ -745,6 +757,129 @@ grep "CooccurrenceService 未启用" logs/service.log | tail -3
 | 表里 `is_new_pair=TRUE` 一直 0 对 | 阈值太严 / 数据稀疏 / baseline 已包含历史共现 | 等几天数据攒厚；或把 `cooccur_min_cooccur_count` 临时调到 2 看效果 |
 | 共现榜全是 BTC + ETH 这种巨头 | 候选集没过滤巨头（hotness 黑名单只过滤 hotness 输出，不影响共现） | 这是设计行为——巨头共现可信度的确高；想屏蔽就单独做共现层黑名单（Phase 3） |
 | `cooccur run_once 慢速` 频繁出现 | entity_mentions 涨到 ~50k 行 | 切到 design.md §3.5 的内存方案；当前 4943 行下 < 0.5s |
+
+### 6.5 LLM 简报调参（Phase 2.7 新增）
+
+Phase 2.7 在 hotness 之后加了一层"LLM 解释"——每 15 分钟整点对齐取最新 1h 榜
+Top-N（默认 5）的实体，过滤 `growth_rate >= min_growth` 后调 Ollama 生成结构化
+JSON 简报（叙事 / 催化 / 资金逻辑 / 情绪 / 置信度），写入新表
+`entity_briefings`。
+
+```
+HotnessService 写完 1h 榜
+  └─► BriefingService.run_once（每 :00/:15/:30/:45 触发）
+        └─► 拉 Top-N，筛 growth >= min_growth
+        └─► 跳过同窗口已生成的 entity（uq_entity_briefings_entity_window）
+        └─► 对每个 entity：
+              ├─ 拉 Top-evidence_count（默认 10）条代表消息（按 engagement DESC）
+              ├─ 渲染 prompt（含 cooccur hint，如果共现网络已开）
+              ├─ ollama.chat() ~30s/次（CPU 推理）
+              ├─ json.loads + 字段标准化
+              └─ UPSERT entity_briefings（ON CONFLICT DO NOTHING）
+```
+
+#### 这是什么 / 不是什么
+
+| 是 | 不是 |
+|---|---|
+| 给已经发现的热点实体加"为什么热"解释 | 替代 hotness 公式 / 共现统计 / 告警决策 |
+| 信号产生**后**做归纳 | 让 LLM 反向影响信号产生链路 |
+| 中文叙事级摘要（Restaking 复苏 / AI Agent / RWA） | 推荐买卖动作 |
+| Phase 2 路线图里**唯一调用 LLM** 的子任务 | Phase 1 的"零 LLM"硬约束被打破 |
+
+⚠️ 详细论证："为什么 Phase 2.7 突破零 LLM" 见 `docs/faq_design_decisions.md` Q11。
+
+#### 调参速查
+
+`config/_new.py` 的 `briefing_*` 字段：
+
+| 字段 | 默认 | 调大 / 调小的效果 |
+|---|---|---|
+| `briefing_enabled` | True | False = 整服务不构造，hotness/alert 完全不受影响 |
+| `briefing_top_n` | 5 | 调大 → 单轮耗时更长（每 entity ~30s）；调小 → 漏掉值得 brief 的实体 |
+| `briefing_min_growth` | 5.0 | growth < 阈值的实体不调 LLM；当前数据流量下 5.0 偶尔触发，30.0 几乎不触发 |
+| `briefing_evidence_count` | 10 | 喂给 LLM 的代表消息数；多 → prompt 长 → 推理慢；少 → LLM 看不全 |
+
+`config/_legacy.py` 的 LLM 配置（沿用老链路分组）：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `ollama_model_level5` | "qwen3:8b" | 实测 5/5 entity 全合法 JSON；30b 质量更高但单条 ~90s 太慢 |
+| `ollama_timeout_level5` | 600 | 实测平均 30s/次；600s 是兜底（CPU 偶尔会因消息长拖到 90s+）|
+
+#### 看 briefing 的最快方式
+
+```sql
+-- 最新窗口的所有简报
+SELECT entity, narrative, catalyst, fund_logic, sentiment,
+       round(cast(confidence AS numeric), 2) AS confidence,
+       array_length(evidence_msg_ids, 1) AS evid_n
+FROM entity_briefings
+WHERE window_end = (SELECT max(window_end) FROM entity_briefings)
+ORDER BY confidence DESC NULLS LAST;
+
+-- 看某个 entity 历次的简报演变
+SELECT window_end, narrative, catalyst, sentiment, confidence
+FROM entity_briefings
+WHERE entity = 'BTC'
+ORDER BY window_end DESC
+LIMIT 10;
+
+-- 看 LLM 原始响应（审计幻觉）
+SELECT entity, raw_response->>'raw_text' AS raw_text
+FROM entity_briefings
+WHERE entity = 'EIGEN'
+ORDER BY window_end DESC LIMIT 1;
+```
+
+#### 评估输出质量（部署后 1~2 周做一次）
+
+随机抽 10 条 briefing 人工评估：
+
+```sql
+SELECT entity, narrative, catalyst, sentiment, confidence
+FROM entity_briefings
+WHERE window_end >= now() - INTERVAL '7 days'
+ORDER BY random()
+LIMIT 10;
+```
+
+合格标准：
+- **narrative 抓到主题**：≥ 7/10 人工判定"对"
+- **catalyst 准确**：≥ 7/10 不胡编（关键审计点）
+- **JSON 合法率**：100%（不合法的根本不会写表，看 `grep "briefing JSON parse failed" logs/service.log` 是否频繁）
+
+如果合格率 < 70%，回炉调 `prompts/level5_briefing.txt` 或考虑换更大的模型。
+
+#### 看 briefing 相关日志
+
+```bash
+# 一条 briefing 成功生成
+grep "briefing generated" logs/service.log | tail -10
+
+# 跳过原因
+grep "briefing skipped" logs/service.log | tail -10
+
+# JSON 解析失败（关键监控指标）
+grep "briefing JSON parse failed" logs/service.log | tail -5
+
+# LLM 调用失败（超时 / Ollama 不可达）
+grep "briefing LLM call failed" logs/service.log | tail -5
+
+# 启动跳过（briefing_enabled=False）
+grep "BriefingService 未启用" logs/service.log | tail -3
+```
+
+#### 常见问题
+
+| 现象 | 原因 | 解决 |
+|---|---|---|
+| 启动日志没有 `BriefingService 启动` | `briefing_enabled=False` | 检查 `config/_new.py` |
+| `briefing skipped: no eligible entity` 一直出现 | 当前数据 hotness 榜 growth 都低于 min_growth | 临时调小 `briefing_min_growth` 验证；流量起来后再调回 |
+| `briefing LLM call failed` 频繁 | Ollama 服务挂了 / 超时 | `curl http://192.168.1.219:11434/api/tags` 看模型在不在；检查 `OLLAMA_HOST=0.0.0.0:11434` 是否设了 |
+| `briefing JSON parse failed` 频繁 | qwen3:8b 输出 JSON 不稳定 | 检查 prompt 是否被改坏；或换 30b（推理慢但 JSON 更稳）|
+| 同 entity 反复生成 briefing | 不会——`uq_entity_briefings_entity_window` 唯一约束 + ON CONFLICT DO NOTHING | 跨 window_end 才会再次生成（每 15 分钟） |
+| LLM 编造 evidence 之外的内容 | 幻觉风险（prompt 已强调"只能基于消息"，但 qwen3:8b 偶尔会做） | 通过 `evidence_msg_ids` 字段审计：`SELECT raw_response, evidence_msg_ids FROM entity_briefings WHERE entity='X'`，检查 narrative 提到的事件是否在 evidence 里 |
 
 ---
 

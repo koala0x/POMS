@@ -193,3 +193,32 @@ class NewPipelineSettings:
     # 窗口消息数下限：< 此值跳过本轮（数据稀疏 PMI 全是噪音）
     # 50 是经验值；当前流量下 24h 内带 ≥1 实体的消息总数 800+，远超阈值
     cooccur_min_window_msgs: int = 50
+
+    # ==========================================================================
+    # L5 LLM Briefing（Phase 2.7 LLM 定向简报，新增）
+    # --------------------------------------------------------------------------
+    # 每 15 分钟整点取最新 1h 榜 Top-N，给 growth >= min_growth 的实体调 LLM
+    # 生成 JSON 简报（叙事 / 催化 / 资金逻辑 / sentiment / confidence），
+    # 写入新表 entity_briefings。
+    #
+    # ★ 这是 Phase 1/2.x"零 LLM"硬约束的明确突破——但只在"信号产生后加解释"，
+    # 不让 LLM 反向影响信号产生链路。详见 docs/faq_design_decisions.md Q11。
+    # ==========================================================================
+
+    # 是否启用 L5 LLM 简报。False → main.py 跳过 service 构造，零开销
+    briefing_enabled: bool = True
+
+    # 取最新 1h 榜的 Top-N 实体作为候选（默认 5：CPU 推理慢，单轮 ~2.5 分钟可控）
+    # 调大 → 单轮耗时更长，可能拖累 worker 主循环
+    # 调小 → 漏掉一些值得 brief 的实体
+    briefing_top_n: int = 5
+
+    # growth_rate >= 此值才调 LLM；过滤"温和上涨"避免 LLM 浪费在噪音上
+    # 30 是经验值；按当前数据流量可能太高（hotness 榜 growth 中位数 ~2），
+    # 部署后观察一周再调。先调到 5.0 与 alert_growth_threshold 对齐
+    briefing_min_growth: float = 5.0
+
+    # 每个 entity 喂给 LLM 的代表消息数上限
+    # 10 条 × 平均 200 字 ≈ 2000 token，加 prompt 模板 + 输出留白远低于
+    # qwen3:8b 的 16384 上下文，安全余量充足
+    briefing_evidence_count: int = 10

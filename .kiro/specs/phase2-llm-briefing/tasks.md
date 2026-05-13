@@ -62,8 +62,8 @@ from llm.ollama_client import OllamaClient
 
 ollama_l5 = OllamaClient(
     base_url=settings.ollama_base_url,
-    model=settings.ollama_model_level1,  # 复用 qwen3:8b
-    timeout_seconds=settings.ollama_timeout_level1,
+    model=settings.ollama_model_level5,
+    timeout_seconds=settings.ollama_timeout_level5,
 )
 ```
 
@@ -88,69 +88,6 @@ CREATE TABLE entity_briefings (
 
 幂等：`(entity, window_end)` 唯一约束。同一窗口同实体多次调用走 ON CONFLICT DO NOTHING（不覆盖）。
 
-### 新增服务
-
-`services/l5_briefing.py` —— `BriefingService`
-
-```python
-@dataclass
-class BriefingService:
-    db
-    hotness_repo
-    mentions_repo
-    briefing_repo
-    ollama: OllamaClient
-    prompt_path: Path
-    top_n: int = 5             # 只对 1h 榜 Top-5 生成 briefing
-    min_growth: float = 30.0   # 只对 growth >= 30 的实体（避免 LLM 浪费在噪音上）
-    timezone: ZoneInfo
-
-    def run_once(self) -> bool:
-        """
-        每 15 分钟整点：
-          1. 拉最新 1h 榜 Top-N（filter growth >= min_growth）
-          2. 跳过已有 briefing 的 entity（ON CONFLICT 兜底）
-          3. 对每个 entity：
-             - 拉 Top-10 evidence 消息（按 engagement 排序，无 engagement 则随机）
-             - 渲染 prompt 模板
-             - 调 ollama.chat → 期望 JSON
-             - 解析 JSON，写入 entity_briefings
-          4. 失败的 entity 不阻塞其它（异常隔离）
-        """
-        ...
-```
-
-### Prompt 模板
-
-`prompts/level5_briefing.txt`：
-
-```
-你是加密市场分析助手。下面是关于实体 {entity} 的 {n_msgs} 条社交媒体消息。
-请只输出一个 JSON 对象，不要任何解释或 markdown 包裹。字段：
-
-{
-  "narrative": "（这个实体当前归属的叙事，例如 "Restaking" / "AI Agent"，不超过 20 字）",
-  "catalyst": "（具体催化事件，例如 "EigenLayer 主网升级 v2.0 上线"，不超过 50 字）",
-  "fund_logic": "（资金面/基本面逻辑，例如 "TVL 反弹至 200 亿美元"，不超过 50 字）",
-  "sentiment": "bullish" | "bearish" | "neutral",
-  "confidence": 0.0-1.0
-}
-
-如果消息中无法判断某字段，填 null。
-
-消息：
-{messages}
-```
-
-### 与 Phase 2.5 / 2.6 的协同
-
-- **如果 Task 2.6（Embedding 聚类）已完成**：evidence 消息直接选每个簇的代表，
-  避免 LLM 看到大量重复内容
-- **如果 Task 2.5（共现）已完成**：briefing 的 narrative 字段可以用共现 Top-PMI
-  的邻居作为 hint 加进 prompt，让 LLM 输出更稳定
-
-本任务不强依赖 2.5/2.6，但都做完后效果会显著提升。
-
 ### 五条硬约束的明确妥协
 
 | 约束 | 本任务的明确状态 |
@@ -161,170 +98,185 @@ class BriefingService:
 | 不破坏向后兼容 | ✅ briefings 表是新增，不动现有 |
 | 配置缺失即降级 | ✅ `briefing_enabled=False` 时跳过 |
 
-**用户决策点**：第 1 条硬约束被明确打破。是否接受？参考方案：
-
-- **A. 接受**（本任务方案）—— 用 LLM 在信号产生后加解释，不影响信号本身
-- **B. 跳过**——保持纯统计系统，不把 LLM 引入新链路（Phase 3 再考虑）
-- **C. 方案变体**：不调 LLM，改成"把 Top-N entity 的代表消息直接附在 Telegram
-  推送里"——你自己读 5 条原文判断为什么热。工程量减少 80%，但失去 LLM 的"归纳
-  叙事"能力
-
 ---
 
 **执行约定**：
 - 每完成一个 Task 跑测试，pass 数只增不减
-- 测试基线起点：**135 passed**（Phase 2.1 完工状态）
-- 全部 Task 完成后落点：**147 passed**（+12，0 回归）
+- 测试基线起点：**157 passed**（Phase 2.5 完工状态，spec 写的 135 是 Phase 2.1
+  的旧基线；本任务实际起点 157，目标 167 = 157 + 10）
+- 全部 Task 完成后落点：**168 passed**（+11，含 1 个 markdown 剥离防御用例，0 回归）
+- ★ Task 6（Telegram 集成）按用户决策**暂缓**——观察 1~2 周 briefing 质量稳定后再做
 
 ---
 
 ## Task 0：可行性 + 用户决策
 
-- [ ] **0.1 跑 pytest 确认基线 135 passed**
-- [ ] **0.2 验证 Ollama 可用**
-  - `curl http://192.168.1.219:11434/api/tags`（看 qwen3:8b 在不在）
-  - 不可用 → 推迟本任务
-- [ ] **0.3 用户决策**：方案 A / B / C
-- [ ] **0.4 Prompt 工程**（实施前在 design.md 完成）
-  - 试写 prompts/level5_briefing.txt
-  - 用 5 个真实 entity（EIGEN / SOL / WIFHAT 等）跑通 LLM 的 JSON 输出
-  - 检查 JSON 合法率（应 ≥ 90%，否则改 prompt）
+- [x] **0.1 跑 pytest 确认基线 157 passed**
+- [x] **0.2 验证 Ollama 可用**
+  - 初始连接被拒（127.0.0.1 only），用户加 `OLLAMA_HOST=0.0.0.0:11434` 后通
+  - `qwen3:8b` 和 `qwen3:30b` 都已 pull
+- [x] **0.3 用户决策：方案 A / B / C → 选 A**
+  - 配置位置：沿用 `config/_legacy.py`（不新建 `_llm.py`）
+  - Task 6 暂缓（先观察 1~2 周 briefing 质量稳定后再接 Telegram）
+- [x] **0.4 Prompt 工程**
+  - 详见 Task 2.2 实测结果
 
 ## Task 1：数据库 schema
 
-- [ ] **1.1 新建 alembic 迁移 `004_phase2_briefings.py`**
-  - 创建 entity_briefings 表
-  - 加 UNIQUE (entity, window_end)
-  - 加索引 idx_briefings_window_end
-- [ ] **1.2 跑迁移 + 验证**
-- [ ] **1.3 加 ORM 模型 `db/models.py`**
-- [ ] **1.4 加 repo `db/repositories/briefings_repo.py`**
+- [x] **1.1 新建 alembic 迁移 `004_phase2_briefings.py`**
+  - 创建 entity_briefings 表 + 1 唯一约束 + 1 条索引
+  - 跳过版本号 003（留给已暂缓的 phase2-embedding-clustering）
+- [x] **1.2 跑迁移 + 验证**
+  - `alembic upgrade head` 成功
+- [x] **1.3 加 ORM 模型 `db/models.py`**
+  - `class EntityBriefing(Base)` 字段对齐迁移 + 加入 __all__
+- [x] **1.4 加 repo `db/repositories/briefings_repo.py`**
   - `upsert_one(entity, window_end, fields)` —— ON CONFLICT DO NOTHING
-  - `fetch_for_entity(entity, window_end)` 给告警通道用
-  - `fetch_recent(window_end, limit)` 给面板用
-- [ ] **1.5 跑测试**
-  - 预期仍 135 passed
+  - `fetch_for_entity(entity, window_end)`
+  - `fetch_recent(window_end, limit)`
+- [x] **1.5 跑测试**
+  - 修了 test_models.py 加 entity_briefings 进 expected 集合
+  - **157 passed**（无回归）
 
-## Task 2：Prompt 模板
+## Task 2：Prompt 模板 + 实测
 
-- [ ] **2.1 创建 `prompts/level5_briefing.txt`**
-  - 见上面"设计草案"
-- [ ] **2.2 用 5 个真实 entity 实测**
-  - 写一个临时脚本 `scripts/_smoke_briefing.py`
-  - 选 5 个当前 hotness 榜单的实体
-  - 拉 Top-10 mention，渲染 prompt，跑 ollama.chat
-  - 检查 JSON 合法率
-- [ ] **2.3 根据实测调 prompt**
-  - 直到 5 条全部输出合法 JSON
-- [ ] **2.4 删除临时脚本**
+- [x] **2.1 创建 `prompts/level5_briefing.txt`**
+  - 含 4 占位符：`{entity}` / `{n_msgs}` / `{cooccur_hint}` / `{messages}`
+  - 强制 JSON 输出 + 禁止 markdown 包裹 + 禁止编造 evidence 之外内容
+- [x] **2.2 用 5 个真实 entity 实测**
+  - 写了临时脚本 `scripts/smoke_briefing.py`
+  - 选 24h 提及最多的 5 个 entity（ETH / BTC / BNB / 稳定币 / OP）
+  - 每条 evidence 10 条，调 qwen3:8b
+- [x] **2.3 根据实测调 prompt**
+  - **实测合法率 5/5 = 100%**，无需回炉
+  - 平均耗时 30s/次（Top-5 一轮 ~2.5 分钟）
+- [x] **2.4 删除临时脚本**
 
 ## Task 3：BriefingService 核心
 
-- [ ] **3.1 创建 `services/l5_briefing.py`**
+- [x] **3.1 创建 `services/l5_briefing.py`**
   - `BriefingService` dataclass + 全部字段
-- [ ] **3.2 实现 `_select_evidence(entity, window_end)` 内部方法**
-  - 拉过去 1h 该 entity 的 mentions
-  - 按 engagement 排序（无 engagement 时随机）
-  - 取 Top-10
-  - 如果 Phase 2.6 已上线：优先取每个 cluster 的代表
-- [ ] **3.3 实现 `_render_prompt(entity, evidence)` 内部方法**
+- [x] **3.2 实现 `_select_evidence(session, entity, window_end)` 内部方法**
+  - JOIN entity_mentions / normalized_messages
+  - ORDER BY engagement DESC, random()（无 engagement 退化为随机）
+  - LIMIT evidence_count（默认 10）
+- [x] **3.3 实现 `_render_prompt(entity, evidence, cooccur_hint)` 内部方法**
   - 加载 prompt_path 模板
-  - 替换 {entity} / {n_msgs} / {messages} 占位符
-- [ ] **3.4 实现 `_parse_json(response)` 内部方法**
-  - JSON.loads + 字段校验
-  - 解析失败 raise ValueError（不写表）
-- [ ] **3.5 实现 `run_once()`**
-  - align_to_quarter
-  - 拉 hotness Top-N（1h 榜 + growth >= min_growth）
-  - 过滤已有 briefing 的 entity（fetch_for_entity 返回非 None）
-  - 对每个 entity：try / except 隔离 + log error
-- [ ] **3.6 单元测试 `tests/test_l5_briefing.py`**（10 个用例）
-  - test_select_evidence_top_n
-  - test_select_evidence_falls_back_to_random_when_no_engagement
-  - test_render_prompt_replaces_placeholders
-  - test_parse_json_valid
-  - test_parse_json_invalid_raises
-  - test_skips_when_no_top_entities
-  - test_skips_already_briefed_entities
-  - test_per_entity_failure_isolated（一个 entity 失败不影响其它）
-  - test_skips_when_window_unchanged
-  - test_low_growth_filtered_out
-- [ ] **3.7 跑测试**
-  - 预期 135 + 10 = **145 passed**
+  - 替换 4 个占位符；evidence 用 `[author @ ts] text[:300]` 拼接
+- [x] **3.4 实现 `_parse_json(response)` 内部方法**
+  - 剥 markdown 代码块（容错 qwen3 偶发包裹）
+  - json.loads + 字段标准化（5 字段全归一化为 None / str / float）
+  - 失败 raise ValueError
+- [x] **3.5 实现 `run_once()` + `_generate_one()`**
+  - 整轮异常隔离：单 entity 失败不影响其它
+  - 整轮无论成败都更新 `_last_processed_window_end`，避免反复扫
+- [x] **3.6 单元测试 `tests/test_l5_briefing.py`**（11 个用例）
+  - test_select_evidence_top_n ✅
+  - test_select_evidence_falls_back_to_random_when_no_engagement ✅
+  - test_render_prompt_replaces_placeholders ✅
+  - test_parse_json_valid ✅
+  - test_parse_json_strips_markdown_code_block ✅（防御）
+  - test_parse_json_invalid_raises ✅
+  - test_skips_when_no_top_entities ✅
+  - test_skips_already_briefed_entities ✅
+  - test_per_entity_failure_isolated ✅
+  - test_skips_when_window_unchanged ✅
+  - test_low_growth_filtered_out ✅
+- [x] **3.7 跑测试**
+  - **168 passed**（157 + 11）
 
 ## Task 4：配置扩展
 
-- [ ] **4.1 改 `config/_legacy.py` 加 LLM briefing 配置（决策：放老链路分组）**
-  - **决策理由**：briefing 是 LLM 配置，跟 ollama_model_level1/level2 同组管理；
-    `_legacy.py` 当前命名虽然偏老链路，但实际它就是"所有 Ollama 配置"的归档处。
-    备选方案：新建 `config/_llm.py` 分组（更干净但要改 settings.py 多继承），
-    实施前在 design.md 决定走哪个
+- [x] **4.1 改 `config/_legacy.py` 加 LLM briefing 配置（决策：放老链路分组）**
   - `ollama_model_level5: str = "qwen3:8b"`
   - `ollama_timeout_level5: int = 600`
-- [ ] **4.2 改 `config/_new.py` 加 briefing 业务配置**
-  - `briefing_enabled: bool = True`
-  - `briefing_top_n: int = 5`
-  - `briefing_min_growth: float = 30.0`
-  - `briefing_evidence_count: int = 10`
-- [ ] **4.3 验证配置加载**
-- [ ] **4.4 跑测试**
-  - 预期仍 145 passed
+- [x] **4.2 改 `config/_new.py` 加 briefing 业务配置**
+  - `briefing_enabled / briefing_top_n / briefing_min_growth / briefing_evidence_count`
+  - `briefing_min_growth` 默认从 spec 的 30.0 调到 5.0（与 alert_growth_threshold 对齐当前数据流量）
+- [x] **4.3 验证配置加载**
+  - 实测 `True / 5 / 5.0 / 10 / "qwen3:8b" / 600` 全部正确
+- [x] **4.4 跑测试**
+  - **168 passed**
 
 ## Task 5：main.py 注入
 
-- [ ] **5.1 改 `main.py`**
-  - 构造 ollama_l5 = OllamaClient(model=ollama_model_level5)
-  - 构造 BriefingService 注入新 services 列表
-  - 配置驱动开关 `if settings.briefing_enabled`
-- [ ] **5.2 配置缺失即降级**
-- [ ] **5.3 验证 main.py 仍能 import**
-- [ ] **5.4 跑测试**
-  - 预期仍 145 passed
+- [x] **5.1 改 `main.py`**
+  - 新增 Step 5f（在 Realtime 之后、Jobs 启动之前）
+  - 构造 `OllamaClient(model=ollama_model_level5)` + `BriefingService`
+  - 共享 hotness_repo / mentions_repo / normalized_repo / cooccur_repo
+  - 加入 `new_services` 列表，调度顺序：normalizer → extractor → hotness ×3
+    → cooccur → alert → briefing（最后）
+- [x] **5.2 配置缺失即降级**
+  - `briefing_enabled=False` → 整服务不构造，log INFO 跳过
+  - Ollama 不可达 → BriefingService 仍构造，但 run_once 单 entity log warning
+    后跳过，不影响 hotness/alert
+- [x] **5.3 验证 main.py 仍能 import**
+  - `python -c "import main"` 干净通过
+- [x] **5.4 跑测试**
+  - **168 passed**
 
-## Task 6：Telegram 推送集成（可选）
+## Task 6：Telegram 推送集成（**已暂缓**）
 
-> 让告警消息附带 briefing 内容，从"什么热"升级到"为什么热"。
+> ⏸️ **状态：暂缓（用户决策 2026-05-14）**
+>
+> 暂缓原因：先让 briefings 表跑 1~2 周观察 LLM 输出质量稳定后再做集成；
+> 否则 LLM 输出抖动可能反过来拉低 Telegram 推送的可读性。
+>
+> 启用条件：
+> - `entity_briefings` 表已积累 ≥ 50 条 briefing
+> - 人工评估 narrative 准确率 ≥ 70%
+> - JSON 解析合法率 ≥ 90%（grep `briefing JSON parse failed` 频率低）
+>
+> 启用方式：恢复下面 6.1~6.3 子项，按 spec 步骤执行。
 
-- [ ] **6.1 改 `services/l2_alert_trigger.py`**
-  - `_render_message` 在原模板基础上追加 briefing 字段（如果存在）
-  - 优雅降级：briefing 不存在时仍按原模板推送
-- [ ] **6.2 加测试**（+2 用例）
-  - test_alert_message_includes_briefing
-  - test_alert_message_falls_back_when_no_briefing
-- [ ] **6.3 跑测试**
-  - 预期 145 + 2 = **147 passed**
+- [~] **6.1 改 `services/l2_alert_trigger.py`**：暂缓
+- [~] **6.2 加测试**（+2 用例）：暂缓
+- [~] **6.3 跑测试**：暂缓
 
 ## Task 7：本地端到端验收
 
-- [ ] **7.1 重启服务**
-  - 启动日志含 "BriefingService 启动：top_n=5 min_growth=30.0"
-- [ ] **7.2 等下一个 quarter，SQL 验证 briefings 已生成**
-  - `SELECT entity, narrative, catalyst, sentiment, confidence FROM entity_briefings ORDER BY created_at DESC LIMIT 10;`
-  - 人工评估输出质量（叙事是否准确？催化事件是否抓到了关键点？）
-- [ ] **7.3 看下一条 Telegram 告警是否带了 briefing 字段**
+- [x] **7.1 重启服务**
+  - 临时 smoke 脚本 `scripts/smoke_briefing_e2e.py` 验证：
+    `BriefingService.run_once()` 跑通，22.6s 单 entity 耗时
+  - 启动日志确认 `BriefingService 启动：top_n=5 min_growth=5.0 ...`
+  - smoke 脚本用完已删除
+- [x] **7.2 等下一个 quarter，SQL 验证 briefings 已生成**
+  - 实测 PRATT 简报已写入：narrative='政治人物 PRATT' / sentiment='bullish' /
+    confidence=0.90 / evidence=1 条
+  - 注：当前数据流量下 hotness 榜实体 growth 普遍 < 5，需要等流量起来或
+    临时调小 `briefing_min_growth` 才能定期触发
+- [~] **7.3 看下一条 Telegram 告警是否带了 briefing 字段**
+  - 跳过：Task 6（Telegram 集成）已暂缓
 
 ## Task 8：文档
 
-- [ ] **8.1 改 `docs/operations_guide.md` §6.5 LLM 简报调参**
-  - 模型选择（qwen3:8b vs 30b）
-  - 超时设置
-  - 评估输出质量的方法
-- [ ] **8.2 加 `docs/faq_design_decisions.md` Q11**
-  - "为什么 Phase 2.7 突破了零 LLM 硬约束？"
-  - "LLM 输出的 narrative 不准确怎么办？"
-  - "为什么不直接用 LLM 替代 hotness 公式？"
+- [x] **8.1 改 `docs/operations_guide.md` §6.5 LLM 简报调参**
+  - 新加 §6.5 整段：协同图 / 是什么不是什么 / 调参速查 / SQL 查表 /
+    评估方法 / 日志关键字 / 常见问题
+  - §6 速查表追加 4 行 briefing 调参
+  - §2 启动日志样例追加 `BriefingService 启动` 一行
+- [x] **8.2 加 `docs/faq_design_decisions.md` Q11**
+  - Q11.1 重新定义硬约束：信号产生链路零 LLM
+  - Q11.2 为什么不让 LLM 替代 hotness（稳定性 / ROI / 噪音抑制 三角度）
+  - Q11.3 LLM 简报的产品价值（最后一公里解释）
+  - Q11.4 处理幻觉的 evidence_msg_ids 审计路径
+  - Q11.5 evidence 排序策略
+  - Q11.6 何时开/何时关
+  - Q11.7 一句话结论
 
 ## 执行顺序与依赖图
 
 ```
-Task 0 (可行性 + 用户决策)
-   └─► Task 1 (schema + repo)
-           └─► Task 2 (prompt 工程)
-                   └─► Task 3 (BriefingService → 145)
+Task 0 (基线 157 + Ollama 可达性 + 决策)
+   └─► Task 1 (schema 迁移 + ORM + repo)
+           └─► Task 2 (prompt 工程 + 5 entity 实测 100% 合法)
+                   └─► Task 3 (BriefingService + 11 测试 → 168)
                            └─► Task 4 (配置)
                                    └─► Task 5 (main.py 注入)
-                                           ├─► Task 6 (Telegram 集成 → 147)
-                                           └─► Task 7 (端到端 + 8 文档)
+                                           └─► Task 7 (端到端验收)
+                                                   └─► Task 8 (文档)
+
+Task 6 (Telegram 集成) ⏸️ 暂缓 1~2 周观察后再启用
 ```
 
 ## 完工后状态
@@ -341,31 +293,36 @@ Task 0 (可行性 + 用户决策)
   db/models.py                       +EntityBriefing ORM
   config/_legacy.py                  +ollama_model_level5 / timeout_level5
   config/_new.py                     +4 briefing 字段
-  main.py                            +BriefingService 构造
-  services/l2_alert_trigger.py       +briefing 渲染
-  tests/test_l2_alert_trigger.py     +2 cases
-  docs/operations_guide.md           +§6.5
+  main.py                            +Step 5f：BriefingService 构造
+  docs/operations_guide.md           +§6.5 + 速查表 4 行 + 启动日志样例 1 行
   docs/faq_design_decisions.md       +Q11
+  tests/test_models.py               +entity_briefings 进 expected 集合
+  .kiro/specs/phase2-llm-briefing/tasks.md  +勾选所有项
 
-测试基线：135 → 147 passed（+12，0 回归）
-新增能力：热点实体的"为什么热"自动归纳
+不动（按用户决策暂缓 Task 6）：
+  services/l2_alert_trigger.py       未改 _render_message
+  tests/test_l2_alert_trigger.py     未加 +2 cases
+
+测试基线：157 → 168 passed（+11，含 1 个 markdown 剥离防御用例，0 回归）
+新增能力：热点实体的"为什么热"自动归纳 + Phase 1/2.x"零 LLM"硬约束精确化为
+        "信号产生链路零 LLM"
 ```
 
-## 风险与未决议题（实施前在 design.md 解决）
+## 风险与未决议题（已在 design.md / Q11 解决）
 
-| 风险 | 优先级 | 解决方向 |
+| 风险 | 优先级 | 实际处理 |
 |---|---|---|
-| **零 LLM 硬约束被突破** | 高 | 用户决策；本任务做的是"信号产生后加解释"，不影响信号本身，比 Phase 1 老链路 LLM 摘要更轻 |
-| LLM 输出 JSON 格式不稳定 | 高 | prompt 工程 + 实测合法率 ≥ 90%；不合法的不写表 |
-| LLM 推理慢（CPU 模式）影响 hotness | 中 | 串行 worker 设计已经隔离；BriefingService 排在最后 |
-| qwen3:8b 中文叙事归纳能力够吗 | 中 | 实测 5 个 entity，质量不够换 30b |
-| LLM 幻觉：编造没出现在 evidence 里的内容 | 中 | prompt 强调"只能基于消息内容"+ evidence_msg_ids 字段记录用了哪些消息 |
-| Briefing 信息过期 | 低 | 每 15 分钟刷新，UNIQUE 约束保证同窗口同实体一次 |
-| Telegram 消息长度超限（4096 字符）| 低 | TelegramClient 已有 4000 字符截断逻辑 |
-| 失败的 briefing 占据"已处理"位置 | 低 | 不写表 = ON CONFLICT 不触发 = 下一轮可重试 |
+| **零 LLM 硬约束被突破** | 高 | Q11.1 重新定义为"信号产生链路零 LLM"；briefing 是叶子节点不被任何信号链路读 |
+| LLM 输出 JSON 格式不稳定 | 高 | prompt 工程 + 实测 5/5=100% 合法；剥 markdown 兜底 + 解析失败不写表 |
+| LLM 推理慢（CPU 模式）影响 hotness | 中 | 调度顺序排最后；Top-N=5 控制单轮 ~2.5 分钟；worker 是异步 30s 轮询，能接受 |
+| qwen3:8b 中文叙事归纳能力够吗 | 中 | 实测 5 entity，narrative/catalyst 抓得到主题；continue 用 8b 即可 |
+| LLM 幻觉：编造 evidence 之外的内容 | 中 | prompt 强调"只能基于消息内容"+ evidence_msg_ids 字段记录用了哪些消息（Q11.4 审计路径） |
+| Briefing 信息过期 | 低 | 每 15 分钟刷新；UNIQUE 约束保证同窗口同实体一次 |
+| Telegram 消息长度超限（4096 字符）| — | Task 6 暂缓不涉及 |
+| 失败的 briefing 占据"已处理"位置 | 低 | 不写表 = ON CONFLICT 不触发 = 下一轮 window 可重试 |
 
 ---
 
-*文档版本：v1.0*
-*预估工时：实施前补 design + prompt 工程 1~2 天 + 编码 3~5 天 ≈ 1 周*
-*对早期热点发现的契合度：⭐⭐ 不创造新信号——是"看完榜单后的辅助"。建议放在最后做*
+*文档版本：v1.1（实施完成版）*
+*预估工时实际：编码 4 小时（spec 估 3~5 天，因为 prompt 工程一次性 100% 合法 + 设计沿用现有架构）*
+*对早期热点发现的契合度：⭐⭐ 不创造新信号——是"看完榜单后的辅助"*

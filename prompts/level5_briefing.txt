@@ -1,0 +1,24 @@
+你是加密市场分析助手。下面是关于实体 {entity} 的 {n_msgs} 条社交媒体消息（来自 Twitter / Discord / 币安广场）。
+
+请分析这些消息后，**只输出一个 JSON 对象**，不要任何 markdown 代码块包裹（不要 ```json），不要任何解释或前后说明文字，不要思考过程。
+
+输出 JSON 的字段及约束：
+
+{{
+  "narrative":  "≤ 20 字 / 该实体当前归属的叙事（如 'Restaking 复苏' / 'AI Agent' / 'BTC ETF 资金流入'）；判断不出填 null",
+  "catalyst":   "≤ 50 字 / 具体催化事件（如 'EigenLayer v2.0 主网升级' / 'BlackRock IBIT 连续 5 日净流入'）；判断不出填 null",
+  "fund_logic": "≤ 50 字 / 资金或基本面逻辑（如 'TVL 反弹至 200 亿' / '流通盘小且持仓集中'）；判断不出填 null",
+  "sentiment":  "bullish 或 bearish 或 neutral 三选一；判断不出填 null",
+  "confidence": "0.0-1.0 之间的小数 / 你对上面 narrative 与 catalyst 准确性的置信度"
+}}
+
+硬性约束：
+- 只能基于下面的消息内容做归纳，**不要编造**消息中没有出现过的事件、价格、机构名
+- 任一字段无法从消息中得出 → 该字段填 null（不要瞎猜）
+- 不要输出 ```json``` 包装、不要"以下是分析"、不要任何换行符之外的多余文字
+- 最终输出必须是一个能被 json.loads 直接解析的 JSON 对象
+
+参考共现 hint（如有）：{cooccur_hint}
+
+消息：
+{messages}

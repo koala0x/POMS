@@ -51,6 +51,20 @@ class LegacySettings:
     # level2 单次请求超时（秒）。语义同 ollama_timeout_level1。
     ollama_timeout_level2: int = 600
 
+    # ----- 五次摘要（level5）：Phase 2.7 LLM 定向简报使用，每 15 分钟整点对齐 -----
+    # 复用本分组（_legacy.py）的理由：所有 Ollama 配置统一管理，便于 main.py 把
+    # 三套客户端（level1 / level2 / level5）一次性构造。语义虽然偏老链路，但实际
+    # 它就是"所有 Ollama 配置"的归档处。Phase 3 真有更多 LLM 配置时再迁 _llm.py。
+    # ----------------------------------------------------------------------
+    # qwen3:8b 实测（2026-05-14 prompt 工程）：5 entity 全合法 JSON，平均 30s/次，
+    # Top-5 一轮 ~2.5 分钟。30b 模型质量更高但 CPU 推理 90s+，单轮 7.5 分钟，
+    # 会拖累 worker 节奏；保持 8b 即可（与 level1 同款）。
+    ollama_model_level5: str = "qwen3:8b"
+
+    # level5 单次请求超时（秒）。同 level1/level2。
+    # 实测平均 30s，给 600s 留足余量（CPU 推理偶尔会因为消息过长慢到 60~90s）。
+    ollama_timeout_level5: int = 600
+
     # 注：本地 Ollama 单线程推理，失败重试只会堵死模型且让请求堆积，
     # 所以客户端不做任何重试——失败直接抛错，等下一轮 worker 轮询自然重跑。
 
