@@ -616,6 +616,153 @@ def test_write_failure_rolls_back(sqlite_db: _SqliteDatabase) -> None:
 
 
 # ===========================================================================
+# Part 6：黑名单（exclude_entities）—— 让 BTC/ETH 这种常驻巨头不出现在榜上
+# ===========================================================================
+
+
+def test_exclude_entities_filters_out_blacklisted(monkeypatch) -> None:
+    """
+    新增字段 `exclude_entities`：被列入黑名单的实体应**完全不出现**在
+    最终写入 hotness_snapshots 的 records 里。
+
+    场景：BTC / ETH 短窗有提及，但因为在黑名单里，最终榜单只剩 NEWMEME。
+    """
+    sc = _make_mock_sliding_counter(
+        active=["BTC", "ETH", "NEWMEME"],
+        counts={"BTC": 50, "ETH": 30, "NEWMEME": 5},
+    )
+    repo = _make_mock_mentions_repo(
+        baseline_totals={"BTC": 0, "ETH": 0, "NEWMEME": 0},
+        cross_sources={"BTC": 1, "ETH": 1, "NEWMEME": 1},
+    )
+    hotness_repo = MagicMock()
+
+    svc = HotnessService(
+        db=_FakeDatabase(),
+        mentions_repo=repo,
+        hotness_repo=hotness_repo,
+        sliding_counter=sc,
+        top_k=20,
+        smoothing=2.0,
+        short_hours=1,
+        baseline_days=7,
+        min_baseline_count=100,
+        timezone=ZoneInfo("UTC"),
+        exclude_entities=("BTC", "ETH"),  # ← 黑名单
+    )
+
+    # mock datetime.now
+    import services.l2_hotness as hotness_mod
+
+    fake_now = datetime(2026, 5, 13, 10, 0, 5, tzinfo=ZoneInfo("UTC"))
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz:
+                return fake_now.astimezone(tz)
+            return fake_now
+
+    monkeypatch.setattr(hotness_mod, "datetime", _FakeDateTime)
+
+    assert svc.run_once() is True
+
+    # 看实际写入的 records
+    call = hotness_repo.upsert_batch.call_args
+    records = call.kwargs["records"]
+    names = {r["entity"] for r in records}
+
+    assert names == {"NEWMEME"}, f"黑名单应过滤掉 BTC/ETH，实际：{names}"
+    # 还原：NEWMEME 排名 1（唯一一条）
+    assert records[0]["rank"] == 1
+
+
+def test_exclude_entities_case_insensitive(monkeypatch) -> None:
+    """
+    黑名单比较应不区分大小写。
+    `exclude_entities=("btc",)` 应屏蔽 entity="BTC"（来自 prefilter 的标准化大写）。
+    """
+    sc = _make_mock_sliding_counter(
+        active=["BTC", "OTHER"],
+        counts={"BTC": 10, "OTHER": 5},
+    )
+    repo = _make_mock_mentions_repo(
+        baseline_totals={"BTC": 0, "OTHER": 0},
+        cross_sources={"BTC": 1, "OTHER": 1},
+    )
+    hotness_repo = MagicMock()
+
+    svc = HotnessService(
+        db=_FakeDatabase(),
+        mentions_repo=repo,
+        hotness_repo=hotness_repo,
+        sliding_counter=sc,
+        top_k=20,
+        smoothing=2.0,
+        short_hours=1,
+        baseline_days=7,
+        min_baseline_count=100,
+        timezone=ZoneInfo("UTC"),
+        exclude_entities=("btc",),  # ← 小写写法
+    )
+
+    import services.l2_hotness as hotness_mod
+
+    fake_now = datetime(2026, 5, 13, 10, 0, 5, tzinfo=ZoneInfo("UTC"))
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz:
+                return fake_now.astimezone(tz)
+            return fake_now
+
+    monkeypatch.setattr(hotness_mod, "datetime", _FakeDateTime)
+
+    assert svc.run_once() is True
+    records = hotness_repo.upsert_batch.call_args.kwargs["records"]
+    names = {r["entity"] for r in records}
+    assert names == {"OTHER"}, f"小写黑名单也该屏蔽大写实体，实际：{names}"
+
+
+def test_exclude_entities_default_is_empty(monkeypatch) -> None:
+    """
+    向后兼容：不传 exclude_entities 时（默认空 tuple），所有实体都进榜。
+    """
+    sc = _make_mock_sliding_counter(
+        active=["BTC", "ETH"],
+        counts={"BTC": 10, "ETH": 5},
+    )
+    repo = _make_mock_mentions_repo(
+        baseline_totals={"BTC": 0, "ETH": 0},
+        cross_sources={"BTC": 1, "ETH": 1},
+    )
+    hotness_repo = MagicMock()
+
+    # 不传 exclude_entities，走默认值 ()
+    svc = _make_service(sliding_counter=sc, mentions_repo=repo, hotness_repo=hotness_repo)
+    assert svc.exclude_entities == ()
+
+    import services.l2_hotness as hotness_mod
+
+    fake_now = datetime(2026, 5, 13, 10, 0, 5, tzinfo=ZoneInfo("UTC"))
+
+    class _FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz:
+                return fake_now.astimezone(tz)
+            return fake_now
+
+    monkeypatch.setattr(hotness_mod, "datetime", _FakeDateTime)
+
+    svc.run_once()
+    records = hotness_repo.upsert_batch.call_args.kwargs["records"]
+    names = {r["entity"] for r in records}
+    assert names == {"BTC", "ETH"}, f"默认空黑名单应不过滤，实际：{names}"
+
+
+# ===========================================================================
 # loguru 日志捕获 fixture（复用 Task 5.3 同款策略）
 # ===========================================================================
 
