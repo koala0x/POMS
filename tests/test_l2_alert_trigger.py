@@ -223,6 +223,7 @@ def _make_service(
     cooldown_minutes: int = 60,
     escalation_growth_multiplier: float = 1.5,
     heartbeat_hours: int = 6,
+    briefing_repo=None,
 ) -> AlertTriggerService:
     if telegram_client is None:
         telegram_client = MagicMock()
@@ -237,6 +238,7 @@ def _make_service(
         cooldown_minutes=cooldown_minutes,
         escalation_growth_multiplier=escalation_growth_multiplier,
         heartbeat_hours=heartbeat_hours,
+        briefing_repo=briefing_repo,
     )
 
 
@@ -679,3 +681,127 @@ def test_alert_trigger_ignores_6h_24h_records(
     assert "BTC" in svc._alert_records
     assert "ETH" not in svc._alert_records
     assert "SOL" not in svc._alert_records
+
+
+
+# ===========================================================================
+# Phase 2.7 Task 6 集成：briefing 字段渲染（+2 用例）
+# ---------------------------------------------------------------------------
+# 验证 AlertTriggerService 在收到 briefing_repo 注入后，告警消息会附加
+# "📰 narrative | catalyst" 一行；未注入或查不到 briefing 时优雅降级到原模板。
+# ===========================================================================
+
+
+def test_alert_message_includes_briefing(sqlite_db, monkeypatch) -> None:
+    """
+    Task 6 主路径：briefing_repo 注入 + fetch_latest_for_entity 命中 →
+    告警消息正文末尾追加 "📰 {narrative} | {catalyst}" 一行。
+    """
+    hotness_repo = _SqliteHotnessSnapshotsRepo()
+    window_end = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+    with sqlite_db.get_session() as s:
+        hotness_repo.upsert_batch(
+            s,
+            window_end=window_end,
+            window_type="1h",
+            records=[
+                _make_record("EIGEN", growth_rate=25.0, count_short=10, cross_source=2)
+            ],
+        )
+        s.commit()
+    _patch_now(monkeypatch, datetime(2026, 5, 14, 10, 5, 0, tzinfo=timezone.utc))
+
+    # 假 briefing：fetch_latest_for_entity 返回一个 mock briefing 对象
+    fake_briefing = MagicMock()
+    fake_briefing.narrative = "Restaking 复苏"
+    fake_briefing.catalyst = "EigenLayer v2.0 上线"
+    briefing_repo = MagicMock()
+    briefing_repo.fetch_latest_for_entity.return_value = fake_briefing
+
+    svc = _make_service(sqlite_db, hotness_repo, briefing_repo=briefing_repo)
+    assert svc.run_once() is True
+
+    text = svc.telegram_client.send_text.call_args.args[0]
+    assert "📰" in text, f"应含 briefing 行，实际：{text!r}"
+    assert "Restaking 复苏" in text
+    assert "EigenLayer v2.0 上线" in text
+    # 确认 fetch_latest_for_entity 被调用过（不是 fetch_for_entity）
+    briefing_repo.fetch_latest_for_entity.assert_called_once()
+    call = briefing_repo.fetch_latest_for_entity.call_args
+    assert call.kwargs["entity"] == "EIGEN"
+    # since 应该是 window_end - 1h（_BRIEFING_LOOKBACK_HOURS=1）
+    # 注意：SQLite 把 TIMESTAMPTZ 落库后丢 tz，rec.window_end 在测试里是 naive
+    # datetime；这里只验证差值是 1h，不要求 tz 完全相符
+    actual_since = call.kwargs["since"]
+    # 把两个 dt 都转成 naive 比较（去 tzinfo），避免 tz-aware vs naive 报错
+    expected_since_naive = (window_end - timedelta(hours=1)).replace(tzinfo=None)
+    actual_since_naive = (
+        actual_since.replace(tzinfo=None)
+        if actual_since.tzinfo is not None
+        else actual_since
+    )
+    assert actual_since_naive == expected_since_naive
+
+
+def test_alert_message_falls_back_when_no_briefing(sqlite_db, monkeypatch) -> None:
+    """
+    Task 6 降级路径：briefing_repo 注入但 fetch_latest_for_entity 返回 None
+    → 走原模板（不追加 📰 行），告警照常发。
+    """
+    hotness_repo = _SqliteHotnessSnapshotsRepo()
+    window_end = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+    with sqlite_db.get_session() as s:
+        hotness_repo.upsert_batch(
+            s,
+            window_end=window_end,
+            window_type="1h",
+            records=[
+                _make_record("BTC", growth_rate=25.0, count_short=10, cross_source=2)
+            ],
+        )
+        s.commit()
+    _patch_now(monkeypatch, datetime(2026, 5, 14, 10, 5, 0, tzinfo=timezone.utc))
+
+    briefing_repo = MagicMock()
+    briefing_repo.fetch_latest_for_entity.return_value = None  # 无 briefing
+
+    svc = _make_service(sqlite_db, hotness_repo, briefing_repo=briefing_repo)
+    assert svc.run_once() is True
+
+    text = svc.telegram_client.send_text.call_args.args[0]
+    assert "📰" not in text, f"不应含 briefing 行（fetch 返回 None），实际：{text!r}"
+    # 关键断言：原告警字段都还在
+    assert "BTC" in text
+    assert "[首次]" in text
+
+
+def test_alert_message_briefing_query_failure_does_not_break_alert(
+    sqlite_db, monkeypatch
+) -> None:
+    """
+    Task 6 健壮性：briefing_repo.fetch_latest_for_entity 抛异常 →
+    告警照常发，只追加日志（spec Req 8.3：告警永远不应等 briefing）。
+    """
+    hotness_repo = _SqliteHotnessSnapshotsRepo()
+    window_end = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+    with sqlite_db.get_session() as s:
+        hotness_repo.upsert_batch(
+            s,
+            window_end=window_end,
+            window_type="1h",
+            records=[
+                _make_record("SOL", growth_rate=25.0, count_short=10, cross_source=2)
+            ],
+        )
+        s.commit()
+    _patch_now(monkeypatch, datetime(2026, 5, 14, 10, 5, 0, tzinfo=timezone.utc))
+
+    briefing_repo = MagicMock()
+    briefing_repo.fetch_latest_for_entity.side_effect = RuntimeError("simulated DB outage")
+
+    svc = _make_service(sqlite_db, hotness_repo, briefing_repo=briefing_repo)
+    assert svc.run_once() is True  # 告警照常发
+
+    text = svc.telegram_client.send_text.call_args.args[0]
+    assert "📰" not in text
+    assert "SOL" in text

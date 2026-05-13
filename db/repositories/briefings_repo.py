@@ -83,6 +83,34 @@ class BriefingsRepo:
         )
         return session.scalar(stmt)
 
+    def fetch_latest_for_entity(
+        self,
+        session: Session,
+        *,
+        entity: str,
+        since: datetime,
+    ) -> Optional[EntityBriefing]:
+        """
+        取该 entity 在 [since, +∞) 区间内最新一条 briefing；没有返回 None。
+
+        给 AlertTriggerService 的 _render_message 用：因为 worker 调度顺序是
+        `hotness → cooccur → alert → briefing`，alert 看不到当前 window 的
+        briefing（briefing 还没跑）。本方法兜底：查最近 1 小时内任何 briefing
+        给消息渲染附加，让"持续热点"在第二次告警起就能带上 briefing。
+
+        spec Req 8.3：告警永远不应等待 briefing；首次告警取不到属预期降级。
+        """
+        stmt = (
+            select(EntityBriefing)
+            .where(
+                EntityBriefing.entity == entity,
+                EntityBriefing.window_end >= since,
+            )
+            .order_by(EntityBriefing.window_end.desc())
+            .limit(1)
+        )
+        return session.scalar(stmt)
+
     def fetch_recent(
         self,
         session: Session,

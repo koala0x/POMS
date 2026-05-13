@@ -215,23 +215,36 @@ CREATE TABLE entity_briefings (
 - [x] **5.4 跑测试**
   - **168 passed**
 
-## Task 6：Telegram 推送集成（**已暂缓**）
+## Task 6：Telegram 推送集成
 
-> ⏸️ **状态：暂缓（用户决策 2026-05-14）**
+> ✅ **状态：已完成（2026-05-14 用户决策直接推进）**
 >
-> 暂缓原因：先让 briefings 表跑 1~2 周观察 LLM 输出质量稳定后再做集成；
-> 否则 LLM 输出抖动可能反过来拉低 Telegram 推送的可读性。
+> 关键时序设计：worker 调度顺序是 `hotness → cooccur → alert → briefing`，
+> alert 发出去时**当前 window** 的 briefing 还没生成。本任务用
+> `fetch_latest_for_entity(entity, since=window_end - 1h)` 兜底——
+> 查最近 1h 内任何一条 briefing，让"持续热点"在第二轮 alert 起就带 briefing。
+> 首次上榜的 entity 无 briefing 自动降级（spec Req 8.3：告警永远不等 briefing）。
 >
-> 启用条件：
-> - `entity_briefings` 表已积累 ≥ 50 条 briefing
-> - 人工评估 narrative 准确率 ≥ 70%
-> - JSON 解析合法率 ≥ 90%（grep `briefing JSON parse failed` 频率低）
->
-> 启用方式：恢复下面 6.1~6.3 子项，按 spec 步骤执行。
+> 端到端 smoke 已验证：临时插假 hotness + 假 briefing → alert_service.run_once
+> 触发 → Telegram 真收到带 `📰` 行的消息。脚本用完已删除。
 
-- [~] **6.1 改 `services/l2_alert_trigger.py`**：暂缓
-- [~] **6.2 加测试**（+2 用例）：暂缓
-- [~] **6.3 跑测试**：暂缓
+- [x] **6.1 改 `services/l2_alert_trigger.py`**
+  - 加可选字段 `briefing_repo: Optional[object] = None`（默认 None 向后兼容）
+  - 抽出 `_render_briefing_suffix(rec)` 方法做 briefing 查询 + 格式化
+  - `_render_message` 改成 `base + "\n" + suffix`（suffix 空串时不追加）
+  - `_BRIEFING_LOOKBACK_HOURS = 1`（模块常量，便于未来调整）
+  - briefing_repo 加新方法 `fetch_latest_for_entity(entity, since)`
+  - 任何 briefing 查询异常都被 try/except 吞掉 + log warning，不影响告警发送
+- [x] **6.2 加测试**（+3 用例，spec 要求 +2，多了 1 个健壮性用例）
+  - test_alert_message_includes_briefing ✅（命中 → 含 📰 行）
+  - test_alert_message_falls_back_when_no_briefing ✅（未命中 → 走原模板）
+  - test_alert_message_briefing_query_failure_does_not_break_alert ✅
+    （DB 异常 → 告警照常发，不挂）
+- [x] **6.3 跑测试**
+  - **171 passed**（168 + 3）
+- [x] **6.4 main.py 注入 briefing_repo**（spec 没列但必做）
+  - `if settings.briefing_enabled:` 时构造 `BriefingsRepo()` 注入 alert_service
+  - 启动日志追加 `briefing=ON/OFF` 标识
 
 ## Task 7：本地端到端验收
 
@@ -245,8 +258,11 @@ CREATE TABLE entity_briefings (
     confidence=0.90 / evidence=1 条
   - 注：当前数据流量下 hotness 榜实体 growth 普遍 < 5，需要等流量起来或
     临时调小 `briefing_min_growth` 才能定期触发
-- [~] **7.3 看下一条 Telegram 告警是否带了 briefing 字段**
-  - 跳过：Task 6（Telegram 集成）已暂缓
+- [x] **7.3 看下一条 Telegram 告警是否带了 briefing 字段**
+  - 端到端 smoke 验证：插假 hotness（PRATT_SMOKE growth=99）+ 假 briefing
+    → alert_service.run_once → Telegram 真收到含 `📰 政治人物 PRATT | 洛杉矶
+    市长竞选大幅上升` 的消息
+  - 临时脚本用完已删除
 
 ## Task 8：文档
 

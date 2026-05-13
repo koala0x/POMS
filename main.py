@@ -438,6 +438,15 @@ def main() -> None:
             chat_id=settings.telegram_chat_id,
             timeout_seconds=settings.telegram_timeout_seconds,
         )
+        # Phase 2.7 Task 6：briefing 集成
+        # briefing_enabled 时构造 BriefingsRepo() 注入 alert_service，让告警消息
+        # 附带 LLM 简报（narrative / catalyst）。未启用 briefing → 传 None 走原模板。
+        # 注意：alert 调度顺序在 briefing 之前，所以本次 worker 拉到的是上一轮
+        # （15min 前）的 briefing；首次上榜的 entity 无 briefing 自动降级。
+        _alert_briefing_repo = None
+        if settings.briefing_enabled:
+            from db.repositories.briefings_repo import BriefingsRepo
+            _alert_briefing_repo = BriefingsRepo()
         alert_service = AlertTriggerService(
             db=db,
             hotness_repo=hotness_repo,
@@ -449,15 +458,17 @@ def main() -> None:
             escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
             heartbeat_hours=settings.alert_heartbeat_hours,
             message_template=settings.alert_message_template,
+            briefing_repo=_alert_briefing_repo,
         )
         new_services.append(alert_service)
         logger.info(
             "AlertTriggerService 启动：growth_threshold={} cooldown={}min "
-            "escalation×{} heartbeat={}h",
+            "escalation×{} heartbeat={}h briefing={}",
             settings.alert_growth_threshold,
             settings.alert_cooldown_minutes,
             settings.alert_escalation_growth_multiplier,
             settings.alert_heartbeat_hours,
+            "ON" if _alert_briefing_repo is not None else "OFF",
         )
     else:
         logger.info("Telegram 告警未配置（token/chat_id 为空），已禁用")

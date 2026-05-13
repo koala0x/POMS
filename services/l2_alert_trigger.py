@@ -44,6 +44,15 @@ _DEFAULT_TEMPLATE = (
 )
 
 
+# Phase 2.7 Task 6 新增：briefing 渲染窗口（小时）
+# alert 查询"该 entity 在 [now - N 小时, +∞)"区间内最新一条 briefing；
+# 取不到 → 走原模板，告警照常发（spec Req 8.3：告警永远不等 briefing）。
+# 1h 是经验值：briefing 每 15min 整点对齐生成；持续热点连续 4 个 window 都该
+# 有简报，1h 内一定能命中"上一轮"的 briefing。调长 → 老 briefing 也凑合用，
+# 但语境可能过期；调短 → 第一两次告警都没 briefing，等到第三轮才有。
+_BRIEFING_LOOKBACK_HOURS = 1
+
+
 @dataclass(frozen=True)
 class AlertRecord:
     """
@@ -161,6 +170,13 @@ class AlertTriggerService:
 
     # ----- 消息渲染 -----
     message_template: str = _DEFAULT_TEMPLATE
+
+    # ----- Phase 2.7 Task 6 可选 briefing 集成 -----
+    # 默认 None（向后兼容 Phase 2.2 行为；Phase 2.2 测试无需改）。
+    # main.py Step 5d 会在 BriefingService 启用后注入 BriefingsRepo() 实例，
+    # 让告警消息附加 LLM 简报字段（narrative / catalyst）。
+    # 取不到 briefing 时优雅降级：走原模板，不阻塞告警发送（spec Req 8.3）。
+    briefing_repo: Optional[object] = None  # BriefingsRepo | None，避免 import 循环
 
     # ----- 运行时状态（不持久化）-----
     _last_processed_window_end: Optional[datetime] = None
@@ -293,7 +309,7 @@ class AlertTriggerService:
 
     def _render_message(self, rec, alert_type: str) -> str:
         """
-        渲染消息正文（Req 3）。
+        渲染消息正文（Req 3 + Phase 2.7 Task 6 briefing 集成）。
 
         is_new_entity_mark 字段策略：
         - 命中 → "★ 新实体（基线为 0）\n"（自带换行）
@@ -301,10 +317,18 @@ class AlertTriggerService:
         模板里这个占位符后**不**带 \n，避免空串时多一行空白。
 
         模板缺字段时降级（Req 3.4）：log.warning + 用极简降级模板。
+
+        ★ Phase 2.7 Task 6：briefing 集成
+        - 启用条件：self.briefing_repo is not None（main.py 注入了）
+        - 查询：fetch_latest_for_entity(entity, since=window_end - 1h)
+          （查最近 1h 内任何一条 briefing，不限当前窗口；详见 _BRIEFING_LOOKBACK_HOURS）
+        - 命中 → 在原模板基础上追加 "📰 {narrative} | {catalyst}" 一行
+        - 未命中 / 异常 → 走原模板（优雅降级）
+        - **永远不抛异常**：briefing 查询任何错误都被吞掉，告警照常发
         """
         is_new_mark = "★ 新实体（基线为 0）\n" if rec.is_new_entity else ""
         try:
-            return self.message_template.format(
+            base = self.message_template.format(
                 alert_type=alert_type,
                 entity=rec.entity,
                 entity_type=rec.entity_type or "<n/a>",
@@ -317,7 +341,51 @@ class AlertTriggerService:
             )
         except KeyError as e:
             logger.warning("alert template missing key: {}, 用默认模板", e)
-            return (
+            base = (
                 f"🔥 {alert_type} {rec.entity} "
                 f"growth={rec.growth_rate:.1f} rank={rec.rank}"
             )
+
+        # ★ briefing 追加（可选；任何异常都不影响告警）
+        suffix = self._render_briefing_suffix(rec)
+        if suffix:
+            return f"{base}\n{suffix}"
+        return base
+
+    def _render_briefing_suffix(self, rec) -> str:
+        """
+        查最新 briefing 并渲染成 "📰 narrative | catalyst" 格式。
+
+        没有 briefing_repo / 查不到 / DB 异常 → 返回空串（调用方走原模板）。
+        narrative 和 catalyst 至少有一个非空才追加（避免推送一行空 "📰  | "）。
+        """
+        if self.briefing_repo is None:
+            return ""
+
+        try:
+            since = rec.window_end - timedelta(hours=_BRIEFING_LOOKBACK_HOURS)
+            with self.db.get_session() as session:
+                briefing = self.briefing_repo.fetch_latest_for_entity(
+                    session, entity=rec.entity, since=since
+                )
+        except Exception as e:
+            # 查询失败不能影响告警发送；只 log warning
+            logger.warning(
+                "alert briefing fetch failed (优雅降级): entity={} err={}",
+                rec.entity,
+                e,
+            )
+            return ""
+
+        if briefing is None:
+            return ""
+
+        # 渲染：narrative 优先，其次 catalyst；都为空就不追加
+        narrative = (briefing.narrative or "").strip()
+        catalyst = (briefing.catalyst or "").strip()
+        if not narrative and not catalyst:
+            return ""
+        if narrative and catalyst:
+            return f"📰 {narrative} | {catalyst}"
+        # 只有一个有
+        return f"📰 {narrative or catalyst}"
