@@ -44,8 +44,9 @@
 | ORM 表类（db/models.py）| Room `@Entity` 类 | 字段定义清单 |
 | `.venv/bin/python` | 项目专用的解释器路径 | 不要用系统 python，`.venv/bin/pip` 也别用（shebang 指向老路径） |
 | `logs/service.log` | Logcat 日志 | `tail -f` 看实时 |
-| `config/settings.py` | `BuildConfig` / `res/values/config.xml` | 所有运行参数的唯一源 |
-| Ollama HTTP API | Retrofit 调一个 REST API | 给文本、拿文本，超时就失败重试下一轮 |
+| `config/settings.py` | `BuildConfig` / `res/values/config.xml` | 所有运行参数的唯一源（拆成 5 个分组文件管理） |
+| `BriefingService` 调 Ollama | Retrofit 调一个 REST API | 给文本、拿 JSON 简报；项目里**唯一**调 LLM 的服务 |
+| `notifications/telegram_client.py` | OkHttp 调一个推送 API | Telegram Bot Send Message |
 
 ---
 
@@ -71,11 +72,22 @@ CooccurrenceService 启动：window=24h top_pairs=100 min_pmi=1.0 min_cooccur=3
 AlertTriggerService 启动：growth_threshold=5.0 cooldown=60min escalation×1.5 heartbeat=6h briefing=ON
 RealtimeAlertService 启动：burst=50 growth_threshold=30.0 min_count_short=5 cooldown=60min
 BriefingService 启动：top_n=5 min_growth=5.0 evidence_count=10 model=qwen3:8b cooccur_hint=ON
-服务启动成功：worker 跑 7 个 service，空闲 sleep 30s
+服务启动成功：worker 跑 8 个 service，空闲 sleep 30s
 ```
 
 > 说明：当前系统只跑新链路（老链路 Level1Service / Level2Service 已于 2026-05
 > 淘汰）。
+>
+> **service 数量**：默认配置下是 8 个 = NormalizerService + EntityExtractor +
+> HotnessService(1h/6h/24h) + CooccurrenceService + AlertTriggerService +
+> BriefingService。关掉某个开关数字相应减少：
+> - `hotness_6h_enabled=False` / `hotness_24h_enabled=False` → 各 -1
+> - `cooccur_enabled=False` → -1
+> - Telegram 未配置（token/chat_id 为空）→ -1（AlertTriggerService 不构造）
+> - `briefing_enabled=False` → -1
+>
+> RealtimeAlertService 不进 worker 主循环（hook 在 EntityExtractor 内同步触发），
+> 所以**不计入** worker service 数。
 >
 > **Phase 2.1 新增**：`HotnessService` 现在跑三个实例（1h / 6h / 24h），分别产出
 > 短中长三档窗口的排行榜，全部写到同一张 `hotness_snapshots` 表（`window_type` 列区分）。
@@ -332,6 +344,94 @@ hotness = HotnessService(
 result = hotness.run_once()
 print("Hotness 出榜了吗？", result)
 EOF
+```
+
+### 手动跑一次 CooccurrenceService
+
+共现服务想看"现在三源消息里谁跟谁一起被讨论"——不用等下个 :00/:15 整点：
+
+```bash
+.venv/bin/python <<'EOF'
+from config.settings import get_settings
+from db.connection import Database
+from db.repositories.cooccurrence_repo import CooccurrenceRepo
+from db.repositories.entity_mentions_repo import EntityMentionsRepo
+from services.l2_sliding_counter import SlidingCounter
+from services.l3_cooccurrence import CooccurrenceService
+
+settings = get_settings()
+db = Database(settings)
+sc = SlidingCounter()
+sc.backfill_from_db(db)
+
+svc = CooccurrenceService(
+    db=db,
+    mentions_repo=EntityMentionsRepo(),
+    cooccur_repo=CooccurrenceRepo(),
+    sliding_counter=sc,
+    window_type=settings.cooccur_window_type,
+    top_pairs=settings.cooccur_top_pairs,
+    min_cooccur_count=settings.cooccur_min_cooccur_count,
+    min_pmi=settings.cooccur_min_pmi,
+    min_window_msgs=settings.cooccur_min_window_msgs,
+    timezone=settings.timezone,
+)
+print("写入的 pair 数？", svc.run_once())
+EOF
+```
+
+跑完去查 `entity_cooccurrence` 表看 PMI 最高的 Top-20 对（详见 §6.4）。
+
+### 手动跑一次 BriefingService（调 LLM）
+
+⚠️ **会真调 Ollama**，Top-N×30s 推理时间，5 个实体约 2.5 分钟：
+
+```bash
+.venv/bin/python <<'EOF'
+from pathlib import Path
+from config.settings import get_settings
+from db.connection import Database
+from db.repositories.briefings_repo import BriefingsRepo
+from db.repositories.cooccurrence_repo import CooccurrenceRepo
+from db.repositories.entity_mentions_repo import EntityMentionsRepo
+from db.repositories.hotness_snapshots_repo import HotnessSnapshotsRepo
+from db.repositories.normalized_messages_repo import NormalizedMessagesRepo
+from llm.ollama_client import OllamaClient
+from services.l5_briefing import BriefingService
+
+settings = get_settings()
+db = Database(settings)
+ollama = OllamaClient(
+    base_url=settings.ollama_base_url,
+    model=settings.ollama_model_level5,
+    timeout_seconds=settings.ollama_timeout_level5,
+)
+
+svc = BriefingService(
+    db=db,
+    hotness_repo=HotnessSnapshotsRepo(),
+    mentions_repo=EntityMentionsRepo(),
+    normalized_repo=NormalizedMessagesRepo(),
+    briefing_repo=BriefingsRepo(),
+    ollama=ollama,
+    prompt_path=Path("prompts/level5_briefing.txt"),
+    cooccur_repo=CooccurrenceRepo() if settings.cooccur_enabled else None,
+    top_n=settings.briefing_top_n,
+    # 临时调小让所有上榜实体都触发；联调完别忘了删掉这行用回 settings 默认值
+    min_growth=0.5,
+    evidence_count=settings.briefing_evidence_count,
+    timezone=settings.timezone,
+)
+print("有简报新写入？", svc.run_once())
+EOF
+```
+
+跑完去查 `entity_briefings` 表（详见 §6.5）：
+
+```sql
+SELECT entity, narrative, catalyst, sentiment, confidence
+FROM entity_briefings
+ORDER BY created_at DESC LIMIT 5;
 ```
 
 ---
