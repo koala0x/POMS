@@ -65,12 +65,15 @@ cd /Users/ye/Work/Crypto/PomsAI
 
 ```
 数据库连接已初始化
-Ollama 客户端就绪
+老链路已关闭（settings.disable_legacy_pipeline=True）：跳过 Ollama 客户端与 Level1/Level2 Service 初始化
 词典就绪：tickers=57 chains=0 narratives=0 kols=0 aliases=64
 SlidingCounter backfill 结束：ok=True total=<N> elapsed=<X.X>s
-summary worker 启动:level1=3,level2=3,new=3,空闲 sleep 30s
-服务启动成功
+服务启动成功:worker 只跑新链路 (Phase 1 new services=3，空闲 sleep 30s)
 ```
+
+> 说明：`disable_legacy_pipeline` 默认 `True`，只跑新链路（Phase 1 热度排行榜）。
+> 想把老链路 LLM 摘要打开，改 `config/settings.py` 里 `disable_legacy_pipeline: bool = True` → `False`，
+> 然后重启服务。代码本身不用动。
 
 后台跑：
 
