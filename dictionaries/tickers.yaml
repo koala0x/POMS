@@ -103,8 +103,6 @@ PENDLE:
   type: defi
 EIGEN:
   type: defi
-EIGENLAYER:
-  type: defi
 CRV:
   type: defi
 MKR:
@@ -176,11 +174,11 @@ COIN:
 # 稳定币
 # =========================================================================
 
-USDT:
-  type: stablecoin
-  aliases: [稳定币]
-USDC:
-  type: stablecoin
-  aliases: [稳定币]
-DAI:
-  type: stablecoin
+#USDT:
+#  type: stablecoin
+#  aliases: [稳定币]
+#USDC:
+#  type: stablecoin
+#  aliases: [稳定币]
+#DAI:
+#  type: stablecoin

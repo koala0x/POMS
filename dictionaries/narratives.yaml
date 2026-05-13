@@ -111,4 +111,4 @@ Prediction_Market:
 # ===== 预测市场 =====
 稳定币:
   type: stablecoin
-  keywords: [稳定币, CRCL, Circle, ARC, Visa, PayPal, stripe]
+  keywords: [稳定币, CRCL, Circle, ARC, Visa, PayPal, stripe, USDC, USDT, DAI]
