@@ -189,6 +189,29 @@ class AlertSettings:
     alert_24h_min_cross_source: int = 1
 
     # ==========================================================================
+    # Phase 2.8 告警黑名单（与 hotness 黑名单解耦）
+    # --------------------------------------------------------------------------
+    # hotness_exclude_entities 控制"哪些 entity 进 Top-K 表"：
+    #   - 1h / 6h 屏蔽 BTC/ETH/SOL/BNB + 稳定币（小币聚焦）
+    #   - 24h 只屏蔽稳定币（让宏观事件能上榜，给 Digest 看）
+    #
+    # 但"上榜"和"告警"应该分离：
+    #   - 24h 榜里 BTC growth=3 是宏观信号，值得在 Digest 看见
+    #   - 但不应该 push 一条 [首次] BTC 告警——用户视角"大币告警没用"
+    #
+    # alert_exclude_entities 是**所有 alert 实例**（1h/6h/24h/realtime）共用的
+    # 黑名单：被屏蔽的 entity **永远不会触发 Telegram push**，但仍可能出现在
+    # Digest 推送 / hotness_snapshots 表 / 数据库查询里。
+    #
+    # 默认包含 BTC/ETH/SOL/BNB + 稳定币，覆盖"提到很多但你不想被 push 通知"
+    # 的所有大币。命中比较时大小写不敏感（service 内部 .upper()）。
+    # ==========================================================================
+    alert_exclude_entities: tuple[str, ...] = (
+        "BTC", "ETH", "SOL", "BNB",
+        "USDT", "USDC", "DAI","OP","UNI","Solana"
+    )
+
+    # ==========================================================================
     # Phase 2.8 定期热榜 Digest 推送（DigestPusherService）
     # --------------------------------------------------------------------------
     # 周期性把 1h/6h/24h 三窗口最新 Top-N 拼成一条消息推 Telegram。

@@ -364,6 +364,7 @@ def main() -> None:
             growth_delta_pct=settings.alert_growth_delta_pct,
             message_template=settings.alert_message_template,
             display_timezone=settings.timezone,
+            exclude_entities=settings.alert_exclude_entities,
             briefing_repo=_alert_briefing_repo,
         )
         new_services.append(alert_service)
@@ -396,6 +397,7 @@ def main() -> None:
                 growth_delta_pct=settings.alert_growth_delta_pct,
                 message_template=settings.alert_message_template,
                 display_timezone=settings.timezone,
+                exclude_entities=settings.alert_exclude_entities,
                 briefing_repo=_alert_briefing_repo,
             )
             # 共享冷却 dict
@@ -423,6 +425,7 @@ def main() -> None:
                 growth_delta_pct=settings.alert_growth_delta_pct,
                 message_template=settings.alert_message_template,
                 display_timezone=settings.timezone,
+                exclude_entities=settings.alert_exclude_entities,
                 briefing_repo=_alert_briefing_repo,
             )
             alert_24h._alert_records = alert_service._alert_records
@@ -471,7 +474,7 @@ def main() -> None:
             baseline_days=settings.hotness_baseline_days,
             baseline_hours_window=settings.hotness_baseline_days * 24
             - settings.hotness_short_hours,
-            exclude_entities=settings.hotness_exclude_entities,
+            exclude_entities=settings.alert_exclude_entities,
             cooldown_minutes=settings.alert_cooldown_minutes,
             escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
             heartbeat_hours=settings.alert_heartbeat_hours,

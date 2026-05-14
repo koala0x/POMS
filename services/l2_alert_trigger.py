@@ -204,6 +204,13 @@ class AlertTriggerService:
     # main.py 显式传 settings.timezone（默认 Asia/Shanghai）让用户看本地时间
     display_timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
 
+    # ----- Phase 2.8 告警黑名单 -----
+    # 即便上榜也不推 Telegram 的实体集合（与 hotness 表黑名单解耦）。
+    # 默认空 tuple → 行为等价 Phase 2.2；main.py 显式传 settings.alert_exclude_entities
+    # 屏蔽 BTC/ETH 等大币，避免"宏观信号被当成 [首次] 告警 push"。
+    # 比较时统一 .upper() 大小写不敏感
+    exclude_entities: tuple[str, ...] = ()
+
     # ----- 消息渲染 -----
     message_template: str = _DEFAULT_TEMPLATE
 
@@ -318,7 +325,16 @@ class AlertTriggerService:
         - cross_source >= min_cross_source
 
         任一为 None 视为不合格（理论上 hotness_snapshots 应总是非空，防御性判断）。
+
+        Phase 2.8 增强：检查 `exclude_entities` 黑名单（大小写不敏感）。
+        命中黑名单的 entity 即便突破阈值也不会被告警，避免 BTC/ETH 这种
+        "宏观信号"被推成 [首次] 通知打扰用户。
         """
+        # 黑名单优先短路：避免对常驻大币每轮都做完整三段判断
+        if self.exclude_entities:
+            if rec.entity.upper() in {e.upper() for e in self.exclude_entities}:
+                return False
+
         return (
             rec.growth_rate is not None
             and rec.growth_rate >= self.growth_threshold
