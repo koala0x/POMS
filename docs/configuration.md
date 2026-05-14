@@ -1,6 +1,6 @@
 # 配置参数速查手册
 
-> 系统所有 60 个运行时参数的速查表，按"我现在想干嘛"组织。
+> 系统所有 73 个运行时参数的速查表，按"我现在想干嘛"组织。
 >
 > **改参数流程**：找到对应字段所在的 `config/_*.py` 文件 → 改默认值 → 重启服务。
 > 配置都在 `frozen=True` 的 dataclass 里，**不读 `.env` / 环境变量**。
@@ -12,7 +12,7 @@
 > | `config/_database.py` | `DatabaseSettings` | PG 连接 | 5 |
 > | `config/_runtime.py` | `RuntimeSettings` | 日志 / 时区 / worker 调度 | 4 |
 > | `config/_llm.py` | `LLMSettings` | Ollama 服务（仅 BriefingService 用） | 3 |
-> | `config/_alerts.py` | `AlertSettings` | Telegram + 整点告警 + 实时通道 | 14 |
+> | `config/_alerts.py` | `AlertSettings` | Telegram + 整点告警 + 实时 + 多窗口告警 + Digest（Phase 2.8）| 27 |
 > | `config/_new.py` | `NewPipelineSettings` | 业务流水线参数 | 34 |
 >
 > 全部通过 `config/settings.py` 多继承组装为扁平 `Settings`，业务代码用
@@ -101,9 +101,9 @@
 
 ---
 
-## 5. AlertSettings — Telegram + 整点告警 + 实时
+## 5. AlertSettings — Telegram + 整点告警 + 实时 + Digest
 
-文件：`config/_alerts.py`，14 个字段。
+文件：`config/_alerts.py`，27 个字段（Phase 2.8 新增 13 个：8 个多窗口告警 + 4 个 digest + 1 个 growth_delta_pct）。
 
 ### 5.1 Telegram 凭据（3 个）
 
@@ -125,13 +125,17 @@
 
 > 调参节奏：部署 1 周后查 hotness_snapshots 实际 growth 99% 分位再调。
 
-### 5.3 智能冷却 4 路径决策树（3 个）
+### 5.3 智能冷却 4 路径决策树（4 个；Phase 2.8 新增 1 个）
 
 | 字段 | 类型 | 默认 | 含义 |
 |---|---|---|---|
 | `alert_cooldown_minutes` | int | `60` | 同实体冷却期；期间只在"质变"时再告警 |
 | `alert_escalation_growth_multiplier` | float | `1.5` | growth 升级倍数；本次 ≥ 上次 × 此值 → [升级] |
 | `alert_heartbeat_hours` | int | `6` | 持续热点最长不告警时长；超过即便没质变也再发一次 [持续 Nh] |
+| `alert_growth_delta_pct` *（Phase 2.8）* | float | `0.3` | cooldown 内 growth 涨幅 ≥ 此值即升级；标签 `[growth +X%]`。`0.0` = 关闭，仅依赖 1.5×（旧行为）|
+
+> Phase 2.8 新增的"软门槛"路径解决低流量场景下 growth 翻 1.5 倍很难的问题。
+> 决策顺序：首次 → 心跳 → 1.5× 升级 → 跨源升级 → **软门槛 (+30%) 升级** → cooldown 静默 → cooldown 外重新触发。
 
 ### 5.4 消息渲染（1 个）
 
@@ -151,6 +155,37 @@
 | `realtime_min_count_short` | int | `5` | 比整点严：防"3 条 KOL 同话题转发"误触发 |
 
 > 共享冷却 dict：实时通道与整点通道写**同一个** `_alert_records`（main.py 注入同一引用），同 entity 60 分钟内最多发 1 条（不分通道）。
+
+### 5.6 多窗口告警（Phase 2.8 新增，6 个）
+
+老的 AlertTriggerService 写死只读 1h 榜；Phase 2.8 让 main.py 给 6h / 24h
+各自构造一个独立实例，三者共享同一 `_alert_records` dict（防同 entity 跨窗口
+重复推送）。
+
+| 字段 | 类型 | 默认 | 含义 |
+|---|---|---|---|
+| `alert_6h_enabled` | bool | `True` | False → 跳过 6h 实例构造；中期信号通道关闭 |
+| `alert_6h_growth_threshold` | float | `5.0` | 6h 窗口 growth 阈值（比 1h 低，因 6h 噪音少） |
+| `alert_6h_min_count_short` | int | `5` | 6h 短窗提及数下限 |
+| `alert_6h_min_cross_source` | int | `1` | 6h 跨源数下限 |
+| `alert_24h_enabled` | bool | `True` | False → 跳过 24h 实例构造 |
+| `alert_24h_growth_threshold` | float | `3.0` | 24h 阈值最低（基线最稳，任何明显变化都值得通知） |
+| `alert_24h_min_count_short` | int | `10` | 24h 短窗提及数下限（更高，因为 24h 内 < 10 次提及多半是噪音）|
+| `alert_24h_min_cross_source` | int | `1` | 24h 跨源数下限 |
+
+### 5.7 定期热榜 Digest 推送（Phase 2.8 新增，4 个）
+
+DigestPusherService 每小时整点把 1h/6h/24h Top-N 拼一条消息推 Telegram，与
+事件触发的告警互补，补回老链路淘汰后缺失的"周期性输出"通道。
+
+| 字段 | 类型 | 默认 | 含义 |
+|---|---|---|---|
+| `digest_enabled` | bool | `True` | False → 跳过 service 构造；与 telegram_* 任一为空时也自动禁用 |
+| `digest_top_n` | int | `10` | 每个窗口取 Top-N；调到 20 接近 Telegram 4000 字符上限会触发自动截断 |
+| `digest_push_every_quarters` | int | `4` | 推送间隔（整刻钟数）。1=每 15min / 2=每 30min / 4=每小时整点 |
+| `digest_window_types` | tuple | `("1h","6h","24h")` | 推哪些窗口（按顺序拼到同一条消息）|
+
+> 详细消息格式预览见 `docs/operations_guide.md` §6.6。
 
 ---
 
@@ -288,7 +323,11 @@ ollama_timeout_level5: 600 → 900   # 30b 推理 ~90s/次，给足余量
 ```python
 # config/_alerts.py
 realtime_enabled: True → False     # 关实时通道
-telegram_bot_token: "..." → ""     # 关整个告警
+telegram_bot_token: "..." → ""     # 关整个告警（含 alert / digest 全套）
+alert_6h_enabled: True → False     # 关 6h 窗口告警
+alert_24h_enabled: True → False    # 关 24h 窗口告警
+digest_enabled: True → False       # 关周期热榜推送
+alert_growth_delta_pct: 0.3 → 0.0  # 关 cooldown 内软门槛升级（回到 Phase 2.2 行为）
 
 # config/_new.py
 hotness_6h_enabled: True → False   # 关 6h 榜
@@ -334,8 +373,17 @@ realtime_enabled: False
 
 | 字段名 | 文件 | 默认值 |
 |---|---|---|
+| `alert_24h_enabled` | `_alerts.py` | `True` |
+| `alert_24h_growth_threshold` | `_alerts.py` | `3.0` |
+| `alert_24h_min_count_short` | `_alerts.py` | `10` |
+| `alert_24h_min_cross_source` | `_alerts.py` | `1` |
+| `alert_6h_enabled` | `_alerts.py` | `True` |
+| `alert_6h_growth_threshold` | `_alerts.py` | `5.0` |
+| `alert_6h_min_count_short` | `_alerts.py` | `5` |
+| `alert_6h_min_cross_source` | `_alerts.py` | `1` |
 | `alert_cooldown_minutes` | `_alerts.py` | `60` |
 | `alert_escalation_growth_multiplier` | `_alerts.py` | `1.5` |
+| `alert_growth_delta_pct` | `_alerts.py` | `0.3` |
 | `alert_growth_threshold` | `_alerts.py` | `5.0` |
 | `alert_heartbeat_hours` | `_alerts.py` | `6` |
 | `alert_message_template` | `_alerts.py` | `_DEFAULT_TEMPLATE` |
@@ -358,6 +406,10 @@ realtime_enabled: False
 | `db_user` | `_database.py` | `"all_new"` |
 | `dedup_hamming_threshold` | `_new.py` | `3` |
 | `dedup_window_hours` | `_new.py` | `24` |
+| `digest_enabled` | `_alerts.py` | `True` |
+| `digest_push_every_quarters` | `_alerts.py` | `4` |
+| `digest_top_n` | `_alerts.py` | `10` |
+| `digest_window_types` | `_alerts.py` | `("1h","6h","24h")` |
 | `entity_extractor_batch_size` | `_new.py` | `500` |
 | `hotness_24h_baseline_days` | `_new.py` | `8` |
 | `hotness_24h_enabled` | `_new.py` | `True` |

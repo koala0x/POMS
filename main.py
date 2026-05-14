@@ -321,8 +321,16 @@ def main() -> None:
     # ----------------------------------------------------------------------
     # 仅当 telegram_bot_token + telegram_chat_id 都非空才构造。
     # 调度顺序：必须在 hotness_services 之后（保证最新榜单已写入再扫描）。
+    #
+    # Phase 2.8：多窗口告警支持
+    # - 1h 实例：alert_growth_threshold（默认 20）
+    # - 6h 实例：alert_6h_growth_threshold（默认 5），enabled 受 alert_6h_enabled 控制
+    # - 24h 实例：alert_24h_growth_threshold（默认 3），enabled 受 alert_24h_enabled 控制
+    # 三个实例**共享同一个 _alert_records dict**，避免同 entity 在不同窗口
+    # 重复推送（短期突变上 1h 榜后，6h 榜也会上但被冷却拦下）。
     # ======================================================================
-    alert_service = None
+    alert_service = None  # 1h 主实例（保留旧名给 RealtimeAlertService 注入用）
+    alert_services: list = []
     telegram_client = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         from notifications.telegram_client import TelegramClient
@@ -346,25 +354,81 @@ def main() -> None:
             db=db,
             hotness_repo=hotness_repo,
             telegram_client=telegram_client,
+            window_type="1h",
             growth_threshold=settings.alert_growth_threshold,
             min_count_short=settings.alert_min_count_short,
             min_cross_source=settings.alert_min_cross_source,
             cooldown_minutes=settings.alert_cooldown_minutes,
             escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
             heartbeat_hours=settings.alert_heartbeat_hours,
+            growth_delta_pct=settings.alert_growth_delta_pct,
             message_template=settings.alert_message_template,
             briefing_repo=_alert_briefing_repo,
         )
         new_services.append(alert_service)
+        alert_services.append(alert_service)
         logger.info(
-            "AlertTriggerService 启动：growth_threshold={} cooldown={}min "
-            "escalation×{} heartbeat={}h briefing={}",
+            "AlertTriggerService(1h) 启动：growth_threshold={} cooldown={}min "
+            "escalation×{} delta={:.0%} heartbeat={}h briefing={}",
             settings.alert_growth_threshold,
             settings.alert_cooldown_minutes,
             settings.alert_escalation_growth_multiplier,
+            settings.alert_growth_delta_pct,
             settings.alert_heartbeat_hours,
             "ON" if _alert_briefing_repo is not None else "OFF",
         )
+
+        # ★ 6h 窗口告警实例
+        # 与 1h 共享 _alert_records dict（避免同 entity 双告警）
+        if settings.alert_6h_enabled:
+            alert_6h = AlertTriggerService(
+                db=db,
+                hotness_repo=hotness_repo,
+                telegram_client=telegram_client,
+                window_type="6h",
+                growth_threshold=settings.alert_6h_growth_threshold,
+                min_count_short=settings.alert_6h_min_count_short,
+                min_cross_source=settings.alert_6h_min_cross_source,
+                cooldown_minutes=settings.alert_cooldown_minutes,
+                escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
+                heartbeat_hours=settings.alert_heartbeat_hours,
+                growth_delta_pct=settings.alert_growth_delta_pct,
+                message_template=settings.alert_message_template,
+                briefing_repo=_alert_briefing_repo,
+            )
+            # 共享冷却 dict
+            alert_6h._alert_records = alert_service._alert_records
+            new_services.append(alert_6h)
+            alert_services.append(alert_6h)
+            logger.info(
+                "AlertTriggerService(6h) 启动：growth_threshold={}",
+                settings.alert_6h_growth_threshold,
+            )
+
+        # ★ 24h 窗口告警实例
+        if settings.alert_24h_enabled:
+            alert_24h = AlertTriggerService(
+                db=db,
+                hotness_repo=hotness_repo,
+                telegram_client=telegram_client,
+                window_type="24h",
+                growth_threshold=settings.alert_24h_growth_threshold,
+                min_count_short=settings.alert_24h_min_count_short,
+                min_cross_source=settings.alert_24h_min_cross_source,
+                cooldown_minutes=settings.alert_cooldown_minutes,
+                escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
+                heartbeat_hours=settings.alert_heartbeat_hours,
+                growth_delta_pct=settings.alert_growth_delta_pct,
+                message_template=settings.alert_message_template,
+                briefing_repo=_alert_briefing_repo,
+            )
+            alert_24h._alert_records = alert_service._alert_records
+            new_services.append(alert_24h)
+            alert_services.append(alert_24h)
+            logger.info(
+                "AlertTriggerService(24h) 启动：growth_threshold={}",
+                settings.alert_24h_growth_threshold,
+            )
     else:
         logger.info("Telegram 告警未配置（token/chat_id 为空），已禁用")
 
@@ -408,6 +472,7 @@ def main() -> None:
             cooldown_minutes=settings.alert_cooldown_minutes,
             escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
             heartbeat_hours=settings.alert_heartbeat_hours,
+            growth_delta_pct=settings.alert_growth_delta_pct,
             message_template=settings.alert_message_template,
             timezone=settings.timezone,
         )
@@ -479,6 +544,44 @@ def main() -> None:
         )
     else:
         logger.info("BriefingService 未启用（briefing_enabled=False）")
+
+    # ======================================================================
+    # Step 5h：DigestPusherService（Phase 2.8 定期热榜 Digest 推送）
+    # ----------------------------------------------------------------------
+    # ★ 补回老链路（Level1Service / Level2Service）淘汰后缺失的"周期性输出"通道。
+    # ★ 与 AlertTriggerService 互补：alert 看突变（事件触发），digest 看全貌
+    #   （周期触发，绕过冷却）。用户 Phase 2 反馈"输出太少"的核心解决方案。
+    #
+    # 调度位置：放在所有 hotness_services / alert / briefing 之后，
+    # 保证拉到的是本轮已写入的最新榜单。
+    # ★ 启用条件：
+    #   1. settings.digest_enabled = True
+    #   2. Telegram 已配置（telegram_client is not None，与 alert 同款检查）
+    # ======================================================================
+    if settings.digest_enabled and telegram_client is not None:
+        from services.l2_digest_pusher import DigestPusherService
+
+        digest_service = DigestPusherService(
+            db=db,
+            hotness_repo=hotness_repo,
+            telegram_client=telegram_client,
+            window_types=settings.digest_window_types,
+            top_n=settings.digest_top_n,
+            push_every_quarters=settings.digest_push_every_quarters,
+            timezone=settings.timezone,
+        )
+        new_services.append(digest_service)
+        logger.info(
+            "DigestPusherService 启动：windows={} top_n={} every={} quarters",
+            settings.digest_window_types,
+            settings.digest_top_n,
+            settings.digest_push_every_quarters,
+        )
+    else:
+        if not settings.digest_enabled:
+            logger.info("DigestPusherService 未启用（digest_enabled=False）")
+        else:
+            logger.info("DigestPusherService 跳过：Telegram 未配置")
 
     # ======================================================================
     # Step 6：启动 worker

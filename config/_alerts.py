@@ -146,3 +146,72 @@ class AlertSettings:
     # 5 比整点严，过滤"3 条偶然提及就触发"——
     # 分钟级窗口里 3 条可能就是同一个 KOL 转发同话题。
     realtime_min_count_short: int = 5
+
+    # ==========================================================================
+    # Phase 2.8 决策树调优：cooldown 内 growth 累积升级
+    # --------------------------------------------------------------------------
+    # 老决策树要求 growth ≥ 上次 × escalation_growth_multiplier(=1.5) 才升级，
+    # 低流量场景下 growth 翻倍很难，导致大量 entity 落进"60min 内无质变"被静默。
+    #
+    # 新增软门槛：cooldown 内只要 growth 比上次告警时涨 ≥ growth_delta_pct，
+    # 就升级为 [growth +X%] 告警。1.5x 仍保留，命中"剧烈翻倍"时的强信号。
+    # ==========================================================================
+
+    # cooldown 内 growth 增长百分比阈值（0.0 = 关闭，0.3 = 涨 30% 即升级）。
+    # 默认 0.3：比 escalation_growth_multiplier(1.5) 宽松一档，
+    # 让"温和但持续走高"的实体也能在 cooldown 内被推送一次。
+    alert_growth_delta_pct: float = 0.3
+
+    # ==========================================================================
+    # Phase 2.8 多窗口告警（per-window 阈值参数化）
+    # --------------------------------------------------------------------------
+    # 老 AlertTriggerService 写死只读 1h 榜；6h/24h 榜虽然在写库但不告警。
+    # Phase 2.8 让 main.py 给每个窗口独立构造一个 AlertTriggerService 实例，
+    # 各自独立 growth_threshold / min_count_short，覆盖"短期突变 / 中期趋势
+    # / 宏观叙事"全谱告警。
+    #
+    # 任一窗口的 *_enabled = False → main.py 跳过对应实例构造，零开销。
+    # ==========================================================================
+
+    # 6h 窗口告警是否启用（默认 ON：中期趋势是 alpha 的核心信号源）
+    alert_6h_enabled: bool = True
+    # 6h 窗口 growth_rate 告警阈值。比 1h 严一档（噪音少 → 阈值低也安全），
+    # 但绝对值仍要求"明显异常"
+    alert_6h_growth_threshold: float = 5.0
+    alert_6h_min_count_short: int = 5
+    alert_6h_min_cross_source: int = 1
+
+    # 24h 窗口告警是否启用（默认 ON：宏观叙事每天就那么 1~2 个，告警不会刷屏）
+    alert_24h_enabled: bool = True
+    # 24h growth 阈值最低（基线最稳定 → 任何明显变化都值得通知）
+    alert_24h_growth_threshold: float = 3.0
+    alert_24h_min_count_short: int = 10
+    alert_24h_min_cross_source: int = 1
+
+    # ==========================================================================
+    # Phase 2.8 定期热榜 Digest 推送（DigestPusherService）
+    # --------------------------------------------------------------------------
+    # 周期性把 1h/6h/24h 三窗口最新 Top-N 拼成一条消息推 Telegram。
+    # 与 AlertTriggerService 互补：alert 看突变（事件触发），digest 看全貌（周期触发）。
+    # 老链路（Level1Service / Level2Service）淘汰后这条通道一直缺位，本字段补回。
+    # ==========================================================================
+
+    # digest 推送总开关。False → main.py 跳过 service 构造；与 telegram_*
+    # 任一为空时也自动禁用（与 alert 一样）
+    digest_enabled: bool = True
+
+    # 每次 digest 取每个窗口的 Top-N。
+    # 默认 10 ≈ 一条消息 ~1500 字符（含 Markdown 排版），远低于 Telegram 4000 上限。
+    # 调大需注意：top_n=20 × 3 个窗口 ≈ 4000 字符，可能触发自动截断。
+    digest_top_n: int = 10
+
+    # 推送间隔（整刻钟数）：
+    #   1 = 每 15min 一次（HotnessService 写完就推）
+    #   2 = 每 30min 一次（半小时整点）
+    #   4 = 每小时一次（每小时 :00 整点；默认）
+    # 默认 4 平衡"信息密度"和"刷屏感"；用户嫌少改 2，调试改 1
+    digest_push_every_quarters: int = 4
+
+    # digest 推送哪些窗口（按 tuple 顺序拼接到同一条消息）。
+    # 默认 ("1h","6h","24h") 三个全推；用户可只推 1h 或只推 24h
+    digest_window_types: tuple[str, ...] = ("1h", "6h", "24h")

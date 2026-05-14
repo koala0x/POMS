@@ -161,6 +161,10 @@ class RealtimeAlertService:
     escalation_growth_multiplier: float = 1.5
     heartbeat_hours: int = 6
 
+    # Phase 2.8：cooldown 内 growth 涨幅 ≥ 此值即升级（0.0 = 关闭）。
+    # 与 AlertTriggerService.growth_delta_pct 同义；main.py 显式传配置值。
+    growth_delta_pct: float = 0.0
+
     # =========================================================================
     # 消息渲染
     # =========================================================================
@@ -360,6 +364,7 @@ class RealtimeAlertService:
                     cooldown_minutes=self.cooldown_minutes,
                     escalation_growth_multiplier=self.escalation_growth_multiplier,
                     heartbeat_hours=self.heartbeat_hours,
+                    growth_delta_pct=self.growth_delta_pct,
                 )
                 if not should_alert:
                     continue

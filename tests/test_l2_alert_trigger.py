@@ -411,6 +411,63 @@ def test_growth_doubled_triggers_escalation(
 
 
 # ===========================================================================
+# 用例 6.5（Phase 2.8）：growth 软门槛升级 [growth +X%]
+# ===========================================================================
+
+
+def test_growth_delta_pct_triggers_escalation(
+    sqlite_db, hotness_repo, monkeypatch
+) -> None:
+    """
+    Phase 2.8 决策树新增路径 5：cooldown 内 growth 涨 ≥ growth_delta_pct
+    → 触发 "[growth +X%]" 升级告警。
+
+    场景：上次 growth=20，本次 growth=27（涨 35%），escalation_growth_multiplier=1.5
+    要求 growth ≥ 30 才升级（路径 3 不命中）；但路径 5 阈值 0.3（30%），27/20=1.35
+    超过阈值，应升级。
+    """
+    _seed_records(
+        sqlite_db,
+        hotness_repo,
+        window_end=datetime(2026, 5, 14, 10, 0, 0),
+        records=[_make_record("BTC", growth_rate=20.0, cross_source=1)],
+    )
+    _patch_now(monkeypatch, datetime(2026, 5, 14, 10, 5, 0, tzinfo=timezone.utc))
+
+    svc = AlertTriggerService(
+        db=sqlite_db,
+        hotness_repo=hotness_repo,
+        telegram_client=MagicMock(send_text=MagicMock(return_value=True)),
+        growth_threshold=20.0,
+        min_count_short=3,
+        min_cross_source=1,
+        cooldown_minutes=60,
+        escalation_growth_multiplier=1.5,
+        heartbeat_hours=6,
+        growth_delta_pct=0.3,  # ★ 启用软门槛
+    )
+    assert svc.run_once() is True
+
+    # 第二轮：30 分钟后（cooldown 内），growth=27（涨 35% 但没翻 1.5×）
+    _seed_records(
+        sqlite_db,
+        hotness_repo,
+        window_end=datetime(2026, 5, 14, 10, 15, 0),
+        records=[_make_record("BTC", growth_rate=27.0, cross_source=1)],
+    )
+    _patch_now(monkeypatch, datetime(2026, 5, 14, 10, 35, 0, tzinfo=timezone.utc))
+
+    assert svc.run_once() is True
+    assert svc.telegram_client.send_text.call_count == 2
+
+    # 第二条消息应含 [growth +35%]，不是 [升级]
+    second_text = svc.telegram_client.send_text.call_args_list[1].args[0]
+    assert "[growth +" in second_text
+    assert "35%" in second_text
+    assert "×" not in second_text  # 不应是 [升级 → growth ×X.X]
+
+
+# ===========================================================================
 # 用例 7：cross_source 增加 → 升级告警（即便在冷却内）
 # ===========================================================================
 

@@ -89,6 +89,7 @@ def decide_alert(
     cooldown_minutes: int,
     escalation_growth_multiplier: float,
     heartbeat_hours: int,
+    growth_delta_pct: float = 0.0,
 ) -> tuple[bool, str]:
     """
     4 路径决策树（与 Phase 2.2 §3.2.1 等价）。返回 (是否告警, 触发类型标签)。
@@ -99,13 +100,19 @@ def decide_alert(
     决策树（按优先级，**顺序不可换**）：
         1. 首次告警（last is None）         → True,  "[首次]"
         2. 心跳（elapsed >= heartbeat_hours）→ True,  "[持续 Nh]"
-        3. growth 升级（× ≥ multiplier）     → True,  "[升级 → growth ×X.X]"
+        3. growth 翻倍升级（× ≥ multiplier） → True,  "[升级 → growth ×X.X]"
         4. 跨源升级（cross_source 增加）     → True,  "[跨源升级 +N]"
-        5. cooldown 内 + 无质变             → False, ""
-        6. cooldown 外 + 仍达阈值           → True,  "[重新触发]"
+        5. growth 软门槛升级（涨幅 ≥ growth_delta_pct，Phase 2.8 新增）
+                                            → True,  "[growth +X%]"
+        6. cooldown 内 + 无质变             → False, ""
+        7. cooldown 外 + 仍达阈值           → True,  "[重新触发]"
 
     ★ 心跳必须在 growth 升级之前判断：否则一个持续 6 小时但 growth 没大变
     的热点会落到"60min 内 + 无质变"分支被错过（handoff §4.1）。
+
+    ★ Phase 2.8 新增路径 5（软门槛）解决低流量场景下 growth 难翻倍的问题：
+    传 growth_delta_pct=0.3 即"涨 30% 也升级"。默认 0.0 = 关闭，保持 Phase 2.2
+    行为 100% 等价（旧测试 0 回归）。
     """
     # 路径 1：首次告警
     if last is None:
@@ -133,11 +140,24 @@ def decide_alert(
         delta = current["cross_source"] - last.last_cross_source
         return True, f"[跨源升级 +{delta}]"
 
-    # 路径 5：常规冷却内 + 无质变 → 不告警
+    # 路径 5：growth 软门槛升级（Phase 2.8 新增）
+    # 低流量场景下 growth 翻 1.5 倍很难，但涨 30% 仍是有意义的"持续走高"信号
+    if (
+        growth_delta_pct > 0.0
+        and last.last_growth_rate > 0
+        and current["growth_rate"]
+        >= last.last_growth_rate * (1.0 + growth_delta_pct)
+    ):
+        pct = (
+            current["growth_rate"] / last.last_growth_rate - 1.0
+        ) * 100
+        return True, f"[growth +{pct:.0f}%]"
+
+    # 路径 6：常规冷却内 + 无质变 → 不告警
     if elapsed < timedelta(minutes=cooldown_minutes):
         return False, ""
 
-    # 路径 6：cooldown 外 + 仍达阈值但无明显升级 → 重新触发
+    # 路径 7：cooldown 外 + 仍达阈值但无明显升级 → 重新触发
     return True, "[重新触发]"
 
 
@@ -167,6 +187,16 @@ class AlertTriggerService:
     cooldown_minutes: int = 60
     escalation_growth_multiplier: float = 1.5
     heartbeat_hours: int = 6
+
+    # ----- Phase 2.8 决策树软门槛 -----
+    # cooldown 内 growth 涨幅 ≥ 此值即升级（0.0 = 关闭，保持 Phase 2.2 行为）。
+    # 默认 0.0 让本字段对老调用方完全透明；main.py 显式传配置值生效。
+    growth_delta_pct: float = 0.0
+
+    # ----- Phase 2.8 多窗口告警支持 -----
+    # 本实例对应 hotness_snapshots 哪个 window_type；默认 '1h' 保持 Phase 2.2
+    # 行为 100% 等价。main.py 在多窗口告警时分别构造 1h / 6h / 24h 三个实例。
+    window_type: str = "1h"
 
     # ----- 消息渲染 -----
     message_template: str = _DEFAULT_TEMPLATE
@@ -202,7 +232,9 @@ class AlertTriggerService:
         """
         # ------ Step 1：取最新窗口 ------
         with self.db.get_session() as session:
-            latest = self.hotness_repo.fetch_latest_window_end(session, "1h")
+            latest = self.hotness_repo.fetch_latest_window_end(
+                session, self.window_type
+            )
 
         if latest is None:
             # hotness_snapshots 还没数据（冷启动 / 基线不足导致 hotness 一直跳过）
@@ -219,7 +251,10 @@ class AlertTriggerService:
         # 取 100 是为了把候选集做大；实际能告警的实体很少（被 threshold 过滤）
         with self.db.get_session() as session:
             records = self.hotness_repo.fetch_top_k(
-                session, window_end=latest, window_type="1h", k=100
+                session,
+                window_end=latest,
+                window_type=self.window_type,
+                k=100,
             )
 
         # ------ Step 3：筛选 + 智能冷却 + 推送 ------
@@ -305,6 +340,7 @@ class AlertTriggerService:
             cooldown_minutes=self.cooldown_minutes,
             escalation_growth_multiplier=self.escalation_growth_multiplier,
             heartbeat_hours=self.heartbeat_hours,
+            growth_delta_pct=self.growth_delta_pct,
         )
 
     def _render_message(self, rec, alert_type: str) -> str:

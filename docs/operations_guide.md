@@ -23,13 +23,14 @@
 │    → EntityExtractor      → entity_mentions                      │
 │    → HotnessService ×3    → hotness_snapshots（1h/6h/24h）       │
 │    → CooccurrenceService  → entity_cooccurrence                  │
-│    → AlertTriggerService  → Telegram                             │
+│    → AlertTriggerService ×3 (1h/6h/24h)  → Telegram（突变告警）  │
 │    → BriefingService(LLM) → entity_briefings                     │
+│    → DigestPusherService  → Telegram（周期热榜，整点推送）       │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 历史变更（2026-05）：老链路（Level1Service / Level2Service / Ollama 摘要）
-已淘汰；现在系统**只跑新链路 + LLM 简报**。
+已淘汰；现在系统**只跑新链路 + LLM 简报 + 周期 Digest**。
 
 ---
 
@@ -69,22 +70,27 @@ HotnessService(1h)  启动：top_k=20 smoothing=2.0  baseline_days=7 min_baselin
 HotnessService(6h)  启动：top_k=20 smoothing=5.0  baseline_days=7 min_baseline_count=200
 HotnessService(24h) 启动：top_k=20 smoothing=10.0 baseline_days=8 min_baseline_count=500
 CooccurrenceService 启动：window=24h top_pairs=100 min_pmi=1.0 min_cooccur=3
-AlertTriggerService 启动：growth_threshold=5.0 cooldown=60min escalation×1.5 heartbeat=6h briefing=ON
+AlertTriggerService(1h)  启动：growth_threshold=5.0 cooldown=60min escalation×1.5 delta=30% heartbeat=6h briefing=ON
+AlertTriggerService(6h)  启动：growth_threshold=5.0
+AlertTriggerService(24h) 启动：growth_threshold=3.0
 RealtimeAlertService 启动：burst=50 growth_threshold=30.0 min_count_short=5 cooldown=60min
 BriefingService 启动：top_n=5 min_growth=5.0 evidence_count=10 model=qwen3:8b cooccur_hint=ON
-服务启动成功：worker 跑 8 个 service，空闲 sleep 30s
+DigestPusherService 启动：windows=('1h', '6h', '24h') top_n=10 every=4 quarters
+服务启动成功：worker 跑 10 个 service，空闲 sleep 30s
 ```
 
 > 说明：当前系统只跑新链路（老链路 Level1Service / Level2Service 已于 2026-05
 > 淘汰）。
 >
-> **service 数量**：默认配置下是 8 个 = NormalizerService + EntityExtractor +
-> HotnessService(1h/6h/24h) + CooccurrenceService + AlertTriggerService +
-> BriefingService。关掉某个开关数字相应减少：
+> **service 数量**：默认配置下是 10 个 = NormalizerService + EntityExtractor +
+> HotnessService(1h/6h/24h) + CooccurrenceService + AlertTriggerService(1h/6h/24h) +
+> BriefingService + DigestPusherService。关掉某个开关数字相应减少：
 > - `hotness_6h_enabled=False` / `hotness_24h_enabled=False` → 各 -1
+> - `alert_6h_enabled=False` / `alert_24h_enabled=False` → 各 -1
 > - `cooccur_enabled=False` → -1
-> - Telegram 未配置（token/chat_id 为空）→ -1（AlertTriggerService 不构造）
+> - Telegram 未配置（token/chat_id 为空）→ 全部 alert 实例 + digest 都不构造（-4）
 > - `briefing_enabled=False` → -1
+> - `digest_enabled=False` → -1
 >
 > RealtimeAlertService 不进 worker 主循环（hook 在 EntityExtractor 内同步触发），
 > 所以**不计入** worker service 数。
@@ -99,8 +105,10 @@ BriefingService 启动：top_n=5 min_growth=5.0 evidence_count=10 model=qwen3:8b
 > `Telegram 告警未配置（token/chat_id 为空），已禁用`，告警系统整体跳过初始化，
 > hotness 主流程不受影响。详见 §6.1 "Telegram 告警调参"。
 >
-> AlertTriggerService 当前只读 1h 榜，新增的 6h / 24h 榜对它完全透明。
-> 未来 Phase 2.2.1 会扩展成多通道告警（给 6h / 24h 各配独立 threshold）。
+> Phase 2.8 起 AlertTriggerService 跑**三个实例**（1h / 6h / 24h），
+> 各自独立 `growth_threshold`，覆盖"短期突变 / 中期趋势 / 宏观叙事"全谱告警。
+> 三个实例共享同一个 `_alert_records` dict，避免同 entity 跨窗口被重复推送。
+> `alert_6h_enabled=False` / `alert_24h_enabled=False` 可独立关闭某窗口。
 >
 > **Phase 2.4 新增**：紧跟在 AlertTriggerService 之后还会出现一行
 > `RealtimeAlertService 启动：burst=50 growth_threshold=30.0 min_count_short=5 cooldown=60min`，
@@ -479,12 +487,24 @@ ORDER BY created_at DESC LIMIT 5;
 **注意**：改 DB 配置（`db_host` / `db_port` 等）后重启前先 `psql` 测一下新地址
 通不通，免得进程起来又挂。
 
-### 6.1 Telegram 告警调参（Phase 2 新增）
+### 6.1 Telegram 告警调参（Phase 2 新增 / Phase 2.8 补丁）
 
 Telegram 告警的所有配置都在 `config/_alerts.py`（不在主 `settings.py`，是个分组）。
-关闭整个告警系统：把 `telegram_bot_token` 或 `telegram_chat_id` 改成空字符串，
-重启服务即可——AlertTriggerService 不会被构造，启动日志显示
-`Telegram 告警未配置（token/chat_id 为空），已禁用`。
+关闭整个告警系统：把 `telegram_bot_token` 或 `telegram_chat_id` 改成空字符串,
+重启服务即可——所有 AlertTriggerService 实例与 DigestPusherService 都不会被构造,
+启动日志显示 `Telegram 告警未配置（token/chat_id 为空），已禁用`。
+
+#### Phase 2.8 改动概览（重点）
+
+观察期反馈"输出太少 / 90% 是 [首次] [跨源升级]"的问题在 Phase 2.8 做了三件事:
+
+1. **多窗口告警**：6h / 24h 各自独立 `growth_threshold`,中期 / 宏观信号也能告警了
+   （`alert_6h_growth_threshold=5.0` / `alert_24h_growth_threshold=3.0`）。
+   关闭某个窗口走 `alert_6h_enabled=False` / `alert_24h_enabled=False`。
+2. **决策树软门槛**：`alert_growth_delta_pct=0.3` 让 cooldown 内 growth 涨 ≥ 30%
+   也能升级（标签 `[growth +X%]`），不再强制要求翻 1.5 倍。
+3. **DigestPusherService**：补回老链路淘汰后缺失的"周期热榜推送"通道,
+   每小时整点把 1h/6h/24h Top-N 拼一条 Markdown 消息推到 Telegram,详见 §6.6。
 
 #### 调 threshold 的节奏
 
@@ -966,6 +986,87 @@ grep "BriefingService 未启用" logs/service.log | tail -3
 | `briefing JSON parse failed` 频繁 | qwen3:8b 输出 JSON 不稳定 | 检查 prompt 是否被改坏；或换 30b（推理慢但 JSON 更稳）|
 | 同 entity 反复生成 briefing | 不会——`uq_entity_briefings_entity_window` 唯一约束 + ON CONFLICT DO NOTHING | 跨 window_end 才会再次生成（每 15 分钟） |
 | LLM 编造 evidence 之外的内容 | 幻觉风险（prompt 已强调"只能基于消息"，但 qwen3:8b 偶尔会做） | 通过 `evidence_msg_ids` 字段审计：`SELECT raw_response, evidence_msg_ids FROM entity_briefings WHERE entity='X'`，检查 narrative 提到的事件是否在 evidence 里 |
+| `briefing JSON 解析失败: Expecting value` 报错（旧版） | LLM 输出枚举值漏引号（如 `"sentiment": neutral`）| Phase 2.8 已修：`OllamaClient.chat` 支持 `format=<JSON Schema>` 强约束 + `_parse_json` 加裸枚举值兜底。详见 `services/l5_briefing.py` 的 `_BRIEFING_JSON_SCHEMA` 与 `_BARE_ENUM_RE` |
+
+### 6.6 定期热榜 Digest 推送调参（Phase 2.8 新增）
+
+#### 它是什么
+
+DigestPusherService 是 Phase 2.8 新增的**周期性输出通道**——每小时整点把
+1h / 6h / 24h 三窗口最新 Top-N 拼成一条 Markdown 消息推到 Telegram。
+
+**为什么需要它**：老链路（Level1Service / Level2Service）于 2026-05 淘汰
+后，"周期性把热点摘要推 Telegram"这条通道丢了。新链路的 AlertTriggerService
+是事件触发型（growth 突破阈值 + 通过冷却决策树才推），低流量场景下大量
+entity 落进"首次告警 → 之后无质变"被静默，用户看不到全貌。DigestPusher 补
+回这条通道。
+
+它跟 AlertTriggerService 互补：
+- **alert** 看突变（事件驱动，冷却防刷屏）
+- **digest** 看全貌（时间驱动，绕过冷却）
+
+#### 启动日志
+
+```
+DigestPusherService 启动：windows=('1h', '6h', '24h') top_n=10 every=4 quarters
+```
+
+未启用时一行替换为:
+- `DigestPusherService 未启用（digest_enabled=False）`
+- `DigestPusherService 跳过：Telegram 未配置`
+
+#### 关键参数（`config/_alerts.py`）
+
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `digest_enabled` | `True` | 总开关；False 不构造服务 |
+| `digest_top_n` | `10` | 每个窗口取 Top 多少条进消息 |
+| `digest_push_every_quarters` | `4` | 推送间隔（整刻钟数）。1=每 15min / 2=每 30min / 4=每小时整点 |
+| `digest_window_types` | `("1h","6h","24h")` | 推哪些窗口（按 tuple 顺序拼到同一条消息）|
+
+#### 调参速查
+
+| 现象 / 需求 | 改这个 | 备注 |
+|---|---|---|
+| 嫌信息密度太低 | `digest_push_every_quarters: 4 → 2` | 半小时一份；调到 1 = 每 15 分钟一份会刷屏，慎用 |
+| 嫌每条消息太长 | `digest_top_n: 10 → 5` | 单条消息从 ~1500 字符压到 ~800 字符 |
+| 想关掉某个窗口 | `digest_window_types: ("1h","6h","24h") → ("1h","24h")` | 推 1h 和 24h 不推 6h |
+| 暂停推送 | `digest_enabled: True → False` | 重启生效；alert 通道不受影响 |
+| 推送内容空 | hotness_snapshots 没数据 | 章节渲染会显示"（暂未生成）"；查 `grep "hotness skipped" logs/service.log` |
+
+#### 看 digest 相关日志
+
+```bash
+# 推送成功
+grep "digest pushed" logs/service.log | tail -10
+
+# 推送失败（Telegram 网络 / 限流等）
+grep "digest send failed" logs/service.log | tail -10
+
+# DB 读失败（极少；hotness_snapshots 表问题）
+grep "digest fetch failed" logs/service.log | tail -10
+```
+
+#### 消息格式预览
+
+```
+📊 *热榜快照* @ 2026-05-14 10:00
+
+*🔥 1h 榜（短期突变）*  _（@ 10:00）_
+1. `EIGEN` (ticker)  growth=12.3x  提及=42  跨源=2  ★
+2. `RESTAKING` (narrative)  growth=8.5x  提及=25  跨源=1
+...
+
+*📈 6h 榜（中期趋势）*  _（@ 10:00）_
+1. `RESTAKING` (narrative)  growth=4.2x  提及=120  跨源=2
+...
+
+*🌐 24h 榜（宏观叙事）*  _（@ 10:00）_
+1. `BTC` (ticker)  growth=2.8x  提及=850  跨源=3
+...
+```
+
+行末 `★` 表示 `is_new_entity=TRUE`（基线为 0 的新词），重点关注。
 
 ---
 
