@@ -160,7 +160,7 @@ class AlertSettings:
     # cooldown 内 growth 增长百分比阈值（0.0 = 关闭，0.3 = 涨 30% 即升级）。
     # 默认 0.3：比 escalation_growth_multiplier(1.5) 宽松一档，
     # 让"温和但持续走高"的实体也能在 cooldown 内被推送一次。
-    alert_growth_delta_pct: float = 0.3
+    alert_growth_delta_pct: float = 0.2
 
     # ==========================================================================
     # Phase 2.8 多窗口告警（per-window 阈值参数化）
@@ -210,7 +210,7 @@ class AlertSettings:
     #   2 = 每 30min 一次（半小时整点）
     #   4 = 每小时一次（每小时 :00 整点；默认）
     # 默认 4 平衡"信息密度"和"刷屏感"；用户嫌少改 2，调试改 1
-    digest_push_every_quarters: int = 4
+    digest_push_every_quarters: int = 1
 
     # digest 推送哪些窗口（按 tuple 顺序拼接到同一条消息）。
     # 默认 ("1h","6h","24h") 三个全推；用户可只推 1h 或只推 24h
