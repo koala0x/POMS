@@ -270,7 +270,25 @@ class HotnessService:
           is_new_entity     = (baseline_total == 0 and short_count >= 5)
 
         短窗没有任何提及（count_short == 0）的 entity 直接跳过，不浪费 DB 查询。
+
+        Phase 2.8 修复：每条记录附 entity_type（从词典 alias_index 反查），
+        让 hotness_snapshots / 告警 / digest 都能显示正确类型，
+        而不是显示 "n/a"（早期版本漏写这个字段，DB 列为 NULL）。
         """
+        # 词典反查表：name → entity_type（启动时一次性加载，本方法只读）
+        # 不在词典里的 entity（比如纯 $XXX 正则命中的新币）保持 None，
+        # 渲染时显示为 "ticker"（合理回退：所有 $TICKER 都默认是 ticker 类型，
+        # 详见 prefilter._extract_regex_entities）
+        from dictionaries import get_dictionaries
+
+        dicts = get_dictionaries()
+        # alias_index value 是 (name, entity_type)；这里转成 name → entity_type
+        # 注意：alias_index 用 alias 做 key，所以同一个 name 可能出现多次（不同 alias）
+        # 但 value 里的 entity_type 一定一致（loader 校验过）
+        name_to_type: dict[str, str] = {}
+        for _alias, (name, etype) in dicts.alias_index.items():
+            name_to_type.setdefault(name, etype)
+
         # 候选窗口选择（Phase 2.1 多窗口）：
         # - 1h / 6h 实例：用 24h 窗口的活跃集合作候选（覆盖短窗 + 不会太大）
         # - 24h 实例：必须用 7d 窗口的活跃集合（覆盖 24h 短窗 + 8 天基线，
@@ -311,9 +329,14 @@ class HotnessService:
             final_score = growth_rate * (1 + 0.3 * (cross_source - 1))
             is_new = baseline_total == 0 and short_count >= 5
 
+            # entity_type 优先查词典；未命中（多见于纯 $XXX 正则抓到的新币）
+            # 回退到 "ticker"（prefilter 默认所有 $TICKER 都是 ticker 类型）
+            entity_type = name_to_type.get(entity, "ticker")
+
             records.append(
                 {
                     "entity": entity,
+                    "entity_type": entity_type,
                     "count_short": short_count,
                     "count_baseline": baseline_per_hour,
                     "growth_rate": growth_rate,
