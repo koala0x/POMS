@@ -221,9 +221,9 @@ class NewPipelineSettings:
     # growth_rate >= 此值才调 LLM；过滤"温和上涨"避免 LLM 浪费在噪音上
     # 30 是经验值；按当前数据流量可能太高（hotness 榜 growth 中位数 ~2），
     # 部署后观察一周再调。
-    # ★ 当前为观察期临时值（1.5）：让 LLM 给你尽量多的实体出简报供质量评估
-    # 观察完毕后改回 5.0 与 alert_growth_threshold 对齐
-    briefing_min_growth: float = 1.5
+    # ★ 当前为观察期临时值（0.5）：与 alert_growth_threshold=1.0 配套，
+    # 让所有上榜实体都尽量带 briefing。观察完毕后改回 5.0
+    briefing_min_growth: float = 0.5
 
     # 每个 entity 喂给 LLM 的代表消息数上限
     # 10 条 × 平均 200 字 ≈ 2000 token，加 prompt 模板 + 输出留白远低于

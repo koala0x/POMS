@@ -66,13 +66,14 @@ class AlertSettings:
     # growth_rate ≥ 此值才告警；默认 20 倍（"够热"）。
     # 调小 → 告警更频繁；调大 → 只接 super hot。
     # 部署后建议先观察 1 周 hotness_snapshots.growth_rate 的 99% 分位再调整。
-    # ★ 当前为观察期临时值（2.0）：让你 1~2 天能积累 10~20 条样本评估质量
-    # 观察完毕（约 2 周）后改回 5.0 或 20.0
-    alert_growth_threshold: float = 2.0
+    # ★ 当前为观察期临时值（1.0）：你的数据流量极稀，最新 1h 榜 growth 中位数 ~0.5，
+    # 调到 1.0 让"略高于平均"的实体也触发告警。观察完毕（约 2 周）后改回 5.0 或 20.0
+    alert_growth_threshold: float = 1.0
 
     # count_short ≥ 此值；避免 1 次提及就告警（噪音）。
-    # ★ 当前数据流量较低，观察期临时调低到 2；正常流量回到 3
-    alert_min_count_short: int = 2
+    # ★ 当前数据流量极稀，观察期临时调到 1（即只要被提到就算），让你能积累样本
+    # 流量起来后改回 3
+    alert_min_count_short: int = 1
 
     # cross_source ≥ 此值；Phase 1 跨源命中率低，默认 1（单源也告警）。
     # 调成 2 → 只接多源共振信号（更高质量但告警更稀疏）。
