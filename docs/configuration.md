@@ -22,6 +22,7 @@
 
 ## 目录
 
+0. [日常调参速查（5 个字段搞定 90% 场景）](#0-日常调参速查5-个字段搞定-90-场景)
 1. [总开关清单（一眼看清谁开了谁关了）](#1-总开关清单一眼看清谁开了谁关了)
 2. [DatabaseSettings — PG 连接](#2-databasesettings--pg-连接)
 3. [RuntimeSettings — 日志 / 时区 / worker](#3-runtimesettings--日志--时区--worker)
@@ -38,6 +39,73 @@
    - [6.8 L3 CooccurrenceService](#68-l3-cooccurrenceservice)
    - [6.9 L5 BriefingService](#69-l5-briefingservice)
 7. [常见调参场景](#7-常见调参场景)
+
+---
+
+## 0. 日常调参速查（5 个字段搞定 90% 场景）
+
+> 73 个字段看着多，实际你日常只会动这 5 个。所以这一节放最前面。
+> 看完这一节如果还想"系统化弄懂为什么"，跳到 [docs/faq_design_decisions.md Q12](faq_design_decisions.md#q12)。
+
+### 0.1 配置语义只有 4 类
+
+| 想做什么 | 1h（短期突变）| 3h（中短期）| 6h（中期趋势）| 24h（宏观叙事）|
+|---|---|---|---|---|
+| 要不要这个榜 | 永远 on | `hotness_3h_enabled` | `hotness_6h_enabled` | `hotness_24h_enabled` |
+| 要不要为它告警 | 永远 on | `alert_3h_enabled` | `alert_6h_enabled` | `alert_24h_enabled` |
+| 多敏感才告警（growth ≥ X 倍）| `alert_growth_threshold` | `alert_3h_growth_threshold` | `alert_6h_growth_threshold` | `alert_24h_growth_threshold` |
+| 屏蔽哪些大币上榜 | `hotness_exclude_entities` | `hotness_3h_exclude_entities` | `hotness_6h_exclude_entities` | `hotness_24h_exclude_entities` |
+
+剩下 30+ 个字段（`smoothing` / `baseline_days` / `min_baseline_count` / `min_count_short` / `min_cross_source` / `top_k` / 各种 cooldown）**都不用动**——默认值是按窗口长度算好的。
+
+### 0.2 你日常只会改这 5 个字段
+
+```python
+# config/_alerts.py
+
+# 1~4：4 个窗口的告警阈值。窗口越长，阈值越低
+#       因为 24h 维度 3 倍涨幅是大事；1h 维度 3 倍是常态
+alert_growth_threshold: 5.0       # 1h: 嫌吵调到 10，嫌少调到 3
+alert_3h_growth_threshold: 7.0    # 3h: 同上
+alert_6h_growth_threshold: 5.0    # 6h: 同上
+alert_24h_growth_threshold: 3.0   # 24h: 同上
+
+# 5：不想被打扰的币（只屏蔽 Telegram 推送，Digest 还能看到）
+alert_exclude_entities: ("BTC", "ETH", "SOL", "BNB", "USDT", "USDC", "DAI")
+```
+
+### 0.3 调参速查（按"我想达到什么效果"找）
+
+| 想达到 | 改这个 | 在哪 |
+|---|---|---|
+| 整体告警变少 | 4 个 `alert_*_growth_threshold` 都调高 | `_alerts.py` |
+| 整体告警变多 | 4 个 `alert_*_growth_threshold` 都调低 | `_alerts.py` |
+| BTC 告警别再打扰我 | `alert_exclude_entities` 加 `"BTC"` | `_alerts.py` |
+| BTC 连 Digest 也别看到 | `hotness_*_exclude_entities` 全部加 `"BTC"` | `_new.py` |
+| 临时关闭某个窗口 | `hotness_3h_enabled = False` + `alert_3h_enabled = False` | `_new.py` + `_alerts.py` |
+| Digest 推送频率改成每半小时 | `digest_push_every_quarters: 4 → 2` | `_alerts.py` |
+| Digest 不显示 24h 榜 | `digest_window_types: ("1h","3h","6h","24h") → ("1h","3h","6h")` | `_alerts.py` |
+| 实时通道太吵想关掉 | `realtime_enabled: True → False` | `_alerts.py` |
+
+### 0.4 三种"黑名单"别搞混
+
+| 配置 | 控制什么 | 典型用途 |
+|---|---|---|
+| `hotness_*_exclude_entities` | **不上 hotness_snapshots 表** | BTC 在 1h 噪音太多，连 Digest 都不想看 |
+| `alert_exclude_entities` | **上榜但不推 Telegram alert** | BTC 24h 宏观信号有用，但不想被 push 通知 |
+| `digest_window_types` | **某个窗口完全不进 Digest** | 不想看 24h 榜，只关心 1h/6h |
+
+按屏蔽强度排序：`hotness_exclude` > `alert_exclude` > `digest_window_types` 排除。
+
+### 0.5 改完怎么生效
+
+```bash
+./scripts/restart.sh
+```
+
+下一份榜（最多等 15 分钟）就走新配置了。
+
+---
 
 ---
 

@@ -20,6 +20,7 @@
 8. [Q8：实时告警通道（Phase 2.4）和整点告警怎么协同？会不会刷屏？](#q8)
 9. [Q9：实体共现网络（Phase 2.5）解决了什么问题？为什么用 PMI 而不是简单数共现次数？](#q9)
 10. [Q11：为什么 Phase 2.7 突破了"零 LLM"硬约束？LLM 简报怎么用？](#q11)
+11. [Q12：4 个窗口 × 一堆字段，这么多配置我看晕了，到底要改哪几个？](#q12)
 
 ---
 
@@ -1371,3 +1372,129 @@ LLM 简报把这件事**自动化**——值得 brief 的 Top-N 实体，每 15 
 是它们之上的解释层。Phase 1/2.x 的"零 LLM"硬约束本质上保护的是信号产生链路，
 而不是禁止任何 LLM 接触系统。Phase 2.7 把这条约束精确化为"信号产生链路零 LLM"，
 让 briefing 成为合规的"叶子节点"——只生成、不被读。
+
+
+---
+
+## <a id="q12"></a>Q12：4 个窗口 × 一堆字段，这么多配置我看晕了，到底要改哪几个？
+
+**短答**：
+
+- 配置看着多，实际语义只有 **4 类**：要不要这个榜 / 要不要为它告警 / 多敏感才告警 / 屏蔽哪些大币
+- 日常 90% 时间你只会改 **5 个字段**（4 个 growth_threshold + 1 个 alert_exclude_entities）
+- 其它 30+ 个字段（smoothing / baseline_days / min_count_short / min_cross_source / top_k 等）默认就是对的，你大概率永远不动
+
+**详细答**：
+
+### Q12.1 一句话原则
+
+配置就两件事：
+1. **哪些 entity 能上榜**（hotness 那一组配置控制）
+2. **哪些 entity 上榜后会推 Telegram**（alert 那一组配置控制）
+
+把这两件事拆开看，配置就清楚了：
+
+```
+┌─ 数据流 ─────────────────────────────────────────────┐
+│                                                      │
+│  消息 → entity_mentions                              │
+│           ↓                                          │
+│  HotnessService → hotness_snapshots（哪些上榜）      │
+│           ↓                                          │
+│  AlertTriggerService → Telegram（哪些推送）          │
+│  DigestPusherService → Telegram（每小时全榜回顾）    │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+```
+
+### Q12.2 配置全景图（4 个窗口 × 4 类语义）
+
+| 想做什么 | 1h（短期突变）| 3h（中短期）| 6h（中期趋势）| 24h（宏观叙事）|
+|---|---|---|---|---|
+| 要不要这个榜 | 永远 on | `hotness_3h_enabled` | `hotness_6h_enabled` | `hotness_24h_enabled` |
+| 要不要为它告警 | 永远 on（整点告警）| `alert_3h_enabled` | `alert_6h_enabled` | `alert_24h_enabled` |
+| 多敏感才告警（growth ≥ X 倍）| `alert_growth_threshold` | `alert_3h_growth_threshold` | `alert_6h_growth_threshold` | `alert_24h_growth_threshold` |
+| 屏蔽哪些大币上榜 | `hotness_exclude_entities` | `hotness_3h_exclude_entities` | `hotness_6h_exclude_entities` | `hotness_24h_exclude_entities` |
+
+剩下的 6 类字段（`smoothing` / `baseline_days` / `min_baseline_count` / `min_count_short` / `min_cross_source` / `top_k`）**都不用动**——默认值是按窗口长度算好的，平衡了"敏感度"和"噪音"。
+
+### Q12.3 你日常只会改这 5 个字段
+
+```python
+# config/_alerts.py
+
+# 1~4：4 个窗口的告警阈值。窗口越长，阈值越低。
+#      因为 24h 维度任何 3 倍涨幅都是大事；1h 维度 3 倍是常态。
+alert_growth_threshold: 5.0      # 1h: 嫌吵调到 10，嫌少调到 3
+alert_3h_growth_threshold: 7.0   # 3h: 同上
+alert_6h_growth_threshold: 5.0   # 6h: 同上
+alert_24h_growth_threshold: 3.0  # 24h: 同上
+
+# 5：不想被打扰的币（只屏蔽推送，Digest 还能看到它们）
+alert_exclude_entities: ("BTC", "ETH", "SOL", "BNB", "USDT", "USDC", "DAI")
+```
+
+### Q12.4 三个屏蔽配置的区别
+
+容易混淆的是三种"黑名单"：
+
+| 配置 | 控制什么 | 典型用途 |
+|---|---|---|
+| `hotness_*_exclude_entities` | **不上 hotness_snapshots 表** | BTC 在 1h 噪音太多，连 Digest 都不想看 |
+| `alert_exclude_entities` | **上榜但不推 Telegram alert** | BTC 24h 宏观信号有用，但不想被 push 通知打扰 |
+| `digest_window_types` | **某个窗口完全不进 Digest** | 不想看 24h 榜，只关心 1h/6h |
+
+按"屏蔽强度"排序：`hotness_exclude_entities` > `alert_exclude_entities` > 啥都不动。
+
+### Q12.5 调参速查（按"我想达到什么效果"找）
+
+| 想达到 | 改这个 | 在哪 |
+|---|---|---|
+| 整体告警变少 | 4 个 `alert_*_growth_threshold` 都调高 | `_alerts.py` |
+| 整体告警变多 | 4 个 `alert_*_growth_threshold` 都调低 | `_alerts.py` |
+| BTC 告警别再打扰我 | `alert_exclude_entities` 加 `"BTC"` | `_alerts.py` |
+| BTC 连 Digest 也别看到 | `hotness_*_exclude_entities` 全部加 `"BTC"` | `_new.py` |
+| 临时关闭某个窗口 | `hotness_3h_enabled = False` + `alert_3h_enabled = False` | `_new.py` + `_alerts.py` |
+| Digest 推送频率改成每半小时 | `digest_push_every_quarters: 4 → 2` | `_alerts.py` |
+| Digest 不显示 24h 榜 | `digest_window_types: ("1h","3h","6h","24h") → ("1h","3h","6h")` | `_alerts.py` |
+| 实时通道太吵想关掉 | `realtime_enabled: True → False` | `_alerts.py` |
+
+改完任意字段，`./scripts/restart.sh` 重启即可生效。
+
+### Q12.6 为什么不能用一个全局阈值？
+
+设计上每个窗口都独立配置，是因为不同窗口的 growth 量级天然不同：
+
+| 窗口 | 典型 growth 区间 | 经验阈值 |
+|---|---|---|
+| 1h | 5x ~ 50x（噪音大）| 5.0 |
+| 3h | 4x ~ 20x | 7.0 |
+| 6h | 3x ~ 10x | 5.0 |
+| 24h | 2x ~ 5x（基线最稳）| 3.0 |
+
+如果用统一阈值（比如全部 5.0）：
+- 1h 榜：全是噪音通过，告警刷屏
+- 24h 榜：永远不达标，宏观信号一条都收不到
+
+所以"看似冗余"的多窗口阈值实际是必要的——每个窗口的"数学意义"不同。
+
+### Q12.7 不用动的字段速查
+
+如果你看到这些字段名，**默认就是对的，别动**：
+
+| 字段 | 含义 | 为什么不用动 |
+|---|---|---|
+| `hotness_*_smoothing` | 防冷启动除零的平滑值 | 已按窗口长度等比放大（2/3/5/10），改了反而出问题 |
+| `hotness_*_baseline_days` | 基线天数 | 1h/3h/6h 都用 7 天，24h 必须 ≥ 8 天（数学约束） |
+| `hotness_*_min_baseline_count` | 基线样本下限 | 数据稀少时跳过本轮，避免噪音上榜 |
+| `hotness_*_top_k` | 榜单大小 | 都是 20，改没意义 |
+| `alert_*_min_count_short` | 短窗最低提及数 | 防"1 条爆款就告警"的假信号 |
+| `alert_*_min_cross_source` | 跨源数下限 | 默认 1（单源也告警），改成 2 只接多源共振 |
+| `alert_cooldown_minutes` | 同实体冷却期 | 默认 60min 是经验值；调短会刷屏 |
+| `alert_escalation_growth_multiplier` | growth 翻倍升级倍数 | 默认 1.5×，配合 `alert_growth_delta_pct=0.3` 已足够灵敏 |
+| `alert_heartbeat_hours` | 持续热点心跳间隔 | 默认 6h，调短会刷屏 |
+
+### Q12.8 一句话结论
+
+**配置看着多，实际只有 5 个字段你会真的改**：4 个 growth_threshold + 1 个 alert_exclude_entities。其他都是按数学规律算好的默认值，碰它们之前先确认你确实理解为什么要改——大多数情况下"配置乱"的根因不是配置太多，是默认值不够好；如果你发现某个默认值在你的场景下不合适，欢迎反馈，下一版调整。
+
