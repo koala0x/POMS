@@ -152,7 +152,9 @@ class DigestPusherService:
             return False
 
         # 头部加一个总体时间戳，便于用户对照"这是哪个 15min 整点的快照"
-        header = f"📊 *热榜快照* @ {window_end:%Y-%m-%d %H:%M}\n"
+        # 显式转 self.timezone：window_end 来自 datetime.now(tz)，本来就有 tz；
+        # 但 align_to_quarter 用 .replace(...) 不破坏 tzinfo，保险起见再转一次
+        header = f"📊 *热榜快照* @ {self._fmt_local(window_end)}\n"
         body = header + "\n\n".join(sections)
 
         # 推 Telegram；用 Markdown parse_mode 让标题加粗 + 实体名走 code 块
@@ -198,10 +200,30 @@ class DigestPusherService:
         if not records:
             return f"*{header}*\n_（最新窗口为空）_"
 
-        lines = [f"*{header}*  _（@ {latest:%H:%M}）_"]
+        lines = [f"*{header}*  _（@ {self._fmt_local(latest, time_only=True)}）_"]
         for rec in records:
             lines.append(self._format_record_line(rec))
         return "\n".join(lines)
+
+    def _fmt_local(self, dt, *, time_only: bool = False) -> str:
+        """
+        统一时区渲染。
+
+        - dt 可能是 aware (带 tzinfo) 或 naive (从 PG TIMESTAMPTZ 取出后偶发为 naive UTC)
+        - aware → astimezone(self.timezone) 转到业务时区
+        - naive → 假定是 UTC，先 replace 再转
+
+        time_only=True 只显示 HH:MM；False 显示完整 YYYY-MM-DD HH:MM
+        """
+        from datetime import timezone as _utc_tz
+
+        if dt.tzinfo is None:
+            # SQLAlchemy 偶发把 TIMESTAMPTZ 拿成 naive，按 UTC 假定（PG 默认存 UTC）
+            dt = dt.replace(tzinfo=_utc_tz.utc)
+        local = dt.astimezone(self.timezone)
+        if time_only:
+            return local.strftime("%H:%M")
+        return local.strftime("%Y-%m-%d %H:%M")
 
     @staticmethod
     def _format_record_line(rec) -> str:

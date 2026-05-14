@@ -23,6 +23,7 @@ L2 Telegram 告警触发服务（Phase 2 Task 2.2 新增）。
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -198,6 +199,11 @@ class AlertTriggerService:
     # 行为 100% 等价。main.py 在多窗口告警时分别构造 1h / 6h / 24h 三个实例。
     window_type: str = "1h"
 
+    # ----- Phase 2.8 显示时区 -----
+    # window_end 渲染时显示哪个时区。默认 UTC 保持向后兼容（早期版本行为等价）；
+    # main.py 显式传 settings.timezone（默认 Asia/Shanghai）让用户看本地时间
+    display_timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
+
     # ----- 消息渲染 -----
     message_template: str = _DEFAULT_TEMPLATE
 
@@ -363,6 +369,12 @@ class AlertTriggerService:
         - **永远不抛异常**：briefing 查询任何错误都被吞掉，告警照常发
         """
         is_new_mark = "★ 新实体（基线为 0）\n" if rec.is_new_entity else ""
+        # 时区转换：rec.window_end 来自 PG TIMESTAMPTZ，可能 aware（带 UTC tz）或 naive
+        # 统一兜底：naive 当 UTC 处理；aware 按 self.display_timezone astimezone
+        we = rec.window_end
+        if we.tzinfo is None:
+            we = we.replace(tzinfo=timezone.utc)
+        we_local = we.astimezone(self.display_timezone)
         try:
             base = self.message_template.format(
                 alert_type=alert_type,
@@ -372,7 +384,7 @@ class AlertTriggerService:
                 count_short=rec.count_short,
                 cross_source=rec.cross_source,
                 is_new_entity_mark=is_new_mark,
-                window_end=rec.window_end.strftime("%Y-%m-%d %H:%M"),
+                window_end=we_local.strftime("%Y-%m-%d %H:%M"),
                 rank=rec.rank,
             )
         except KeyError as e:

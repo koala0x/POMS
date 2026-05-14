@@ -422,6 +422,13 @@ class RealtimeAlertService:
         is_new_mark = (
             "★ 新实体（基线为 0）\n" if rec.get("is_new_entity") else ""
         )
+        # rec["window_end"] 来自 datetime.now(timezone.utc)，是 aware UTC。
+        # 按 self.timezone 转成本地显示（默认 Asia/Shanghai 经 main.py 注入）
+        we = rec["window_end"]
+        if we.tzinfo is None:
+            from datetime import timezone as _utc_tz
+            we = we.replace(tzinfo=_utc_tz.utc)
+        we_local = we.astimezone(self.timezone)
         try:
             return self.message_template.format(
                 alert_type=alert_type,
@@ -431,7 +438,7 @@ class RealtimeAlertService:
                 count_short=rec["count_short"],
                 cross_source=rec["cross_source"],
                 is_new_entity_mark=is_new_mark,
-                window_end=rec["window_end"].strftime("%Y-%m-%d %H:%M"),
+                window_end=we_local.strftime("%Y-%m-%d %H:%M"),
                 rank=rec.get("rank", 0),
             )
         except KeyError as e:

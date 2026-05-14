@@ -363,6 +363,7 @@ def main() -> None:
             heartbeat_hours=settings.alert_heartbeat_hours,
             growth_delta_pct=settings.alert_growth_delta_pct,
             message_template=settings.alert_message_template,
+            display_timezone=settings.timezone,
             briefing_repo=_alert_briefing_repo,
         )
         new_services.append(alert_service)
@@ -394,6 +395,7 @@ def main() -> None:
                 heartbeat_hours=settings.alert_heartbeat_hours,
                 growth_delta_pct=settings.alert_growth_delta_pct,
                 message_template=settings.alert_message_template,
+                display_timezone=settings.timezone,
                 briefing_repo=_alert_briefing_repo,
             )
             # 共享冷却 dict
@@ -420,6 +422,7 @@ def main() -> None:
                 heartbeat_hours=settings.alert_heartbeat_hours,
                 growth_delta_pct=settings.alert_growth_delta_pct,
                 message_template=settings.alert_message_template,
+                display_timezone=settings.timezone,
                 briefing_repo=_alert_briefing_repo,
             )
             alert_24h._alert_records = alert_service._alert_records

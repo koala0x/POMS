@@ -165,8 +165,17 @@ def _extract_regex_entities(content: str) -> list["Entity"]:
     entities: list[Entity] = []
 
     # 1. $TICKER 正则命中
+    # `_DOLLAR_RE` 有两个分支：字母/中文起头（真 ticker）和数字起头（价格 $95000 / $0.0837）。
+    # 价格分支只用于 keep/drop 决策（$ + 数字仍是强信号，让消息被保留），
+    # **不应**作为 ticker 实体抽取——否则 "0.0837" / "95000" / "1.71" 这种数字
+    # 会冒充 ticker 进 entity_mentions，污染 hotness 榜单。
+    # Phase 2.8 修复：跳过 group(1) 首字符为数字的匹配，只保留真 ticker。
     for m in _DOLLAR_RE.finditer(content):
-        ticker = m.group(1).upper()
+        captured = m.group(1)
+        if captured and captured[0].isdigit():
+            # 价格 / 数量值，不是 ticker，跳过
+            continue
+        ticker = captured.upper()
         entities.append(
             Entity(name=ticker, entity_type="ticker", confidence=0.95)
         )

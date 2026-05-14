@@ -33,6 +33,10 @@ class RuntimeSettings:
 
     # 业务时区。影响：
     # - 新链路 hotness_snapshots.window_end / entity_briefings.window_end 的对齐参考
+    # - Telegram 告警 / Digest 消息里的时间戳显示
     # 写库字段是 TIMESTAMPTZ，设成 UTC 以外的 tz 只影响显示，不影响存储语义。
     # frozen dataclass 里可变默认必须用 default_factory。
-    timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("UTC"))
+    #
+    # 默认 Asia/Shanghai（UTC+8）：项目主要用户在国内，看 UTC 不直观。
+    # 改成 UTC 走 ZoneInfo("UTC")；改成美东走 ZoneInfo("America/New_York")。
+    timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo("Asia/Shanghai"))

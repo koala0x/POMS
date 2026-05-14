@@ -183,6 +183,38 @@ def test_classify_returns_entities_for_unknown_ticker() -> None:
     assert xyz[0].confidence == 0.95  # 正则命中
 
 
+def test_classify_dollar_price_not_treated_as_ticker() -> None:
+    """
+    Phase 2.8 回归：$0.0837 / $95000 / $1.5B 这种"$ + 数字"是价格，
+    不应被当成 ticker 抽进 entities（否则 hotness 榜会被价格污染成 entity）。
+
+    背景：_DOLLAR_RE 第二个分支 `\\d[\\d.]*[BMK]?` 是为了保留"提到价格"
+    这种强信号让消息不被 keep/drop 过滤误杀；但**价格不是 ticker**。
+    _extract_regex_entities 必须跳过首字符是数字的命中。
+    """
+    cases = [
+        "BTC 跌到 $0.0837 真便宜",     # 小数价格
+        "$95000 是阻力位",               # 整数价格
+        "$1.5B 流动性进场",              # 带 B 后缀的金额
+        "$0.07 也守不住 $0.0837 完了",   # 多个价格混排
+        "$73K 来了",                     # K 后缀
+    ]
+    for text in cases:
+        d = classify(text)
+        # 提取所有 ticker 类型的 entity name
+        ticker_names = [
+            e.name for e in d.entities if e.entity_type == "ticker"
+        ]
+        # 任何 entity name 都不应该是纯数字开头（容忍带字母混合的特殊情况）
+        for name in ticker_names:
+            assert not name[0].isdigit(), (
+                f"价格被当成 ticker 抽出！text={text!r} "
+                f"误抽 ticker={name!r} 全部 entities={d.entities}"
+            )
+        # 消息本身仍应被 keep（保持 $ + 数字的强信号语义）
+        assert d.keep is True, f"$ + 数字消息应被 keep，实际 {d}"
+
+
 def test_classify_dedup_regex_and_dict_hit() -> None:
     """
     Req 4.4：同一 name 被正则与词典双命中时，只保留一条且 confidence=1.0。
