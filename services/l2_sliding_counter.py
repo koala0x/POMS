@@ -32,14 +32,16 @@ from loguru import logger
 from sqlalchemy import select
 
 
-# 五个固定窗口 —— 与 design.md §3.6 对齐
-# 窗口名（15min / 1h / 6h / 24h / 7d）是 count(entity, window) 的合法取值，
+# 六个固定窗口 —— 与 design.md §3.6 对齐
+# 窗口名（15min / 1h / 3h / 6h / 24h / 7d）是 count(entity, window) 的合法取值，
 # 单位是秒，供 cutoff 计算直接用。
-# Phase 2.1 多窗口热度排行榜新增 '6h'：让 HotnessService 能产出 6h 中期榜，
-# add() 一次写入会同步追加到所有 5 个窗口的 deque（基于 WINDOWS_SECONDS 迭代）。
+# Phase 2.1 新增 '6h'；Phase 2.8 新增 '3h'（中短期窗口，介于 1h 和 6h 之间，
+# 适合捕捉"持续 2~3 小时的热点"）。
+# add() 一次写入会同步追加到所有窗口的 deque（基于 WINDOWS_SECONDS 迭代）。
 WINDOWS_SECONDS: dict[str, int] = {
     "15min": 900,
     "1h": 3600,
+    "3h": 10800,
     "6h": 21600,
     "24h": 86400,
     "7d": 604800,

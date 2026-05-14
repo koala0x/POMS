@@ -231,6 +231,37 @@ def main() -> None:
     else:
         logger.info("HotnessService(6h) 未启用（hotness_6h_enabled=False）")
 
+    # 5c.2.5：3h 实例（可选，Phase 2.8 新增）
+    if settings.hotness_3h_enabled:
+        try:
+            hotness_3h = HotnessService(
+                db=db,
+                mentions_repo=mentions_repo,
+                hotness_repo=hotness_repo,
+                sliding_counter=sliding_counter,
+                window_type="3h",
+                top_k=settings.hotness_3h_top_k,
+                smoothing=settings.hotness_3h_smoothing,
+                short_hours=3,
+                baseline_days=settings.hotness_3h_baseline_days,
+                min_baseline_count=settings.hotness_3h_min_baseline_count,
+                timezone=settings.timezone,
+                exclude_entities=settings.hotness_3h_exclude_entities,
+            )
+            hotness_services.append(hotness_3h)
+            logger.info(
+                "HotnessService(3h) 启动：top_k={} smoothing={} baseline_days={} "
+                "min_baseline_count={}",
+                settings.hotness_3h_top_k,
+                settings.hotness_3h_smoothing,
+                settings.hotness_3h_baseline_days,
+                settings.hotness_3h_min_baseline_count,
+            )
+        except ValueError as e:
+            logger.error("HotnessService(3h) 构造失败已跳过：{}", e)
+    else:
+        logger.info("HotnessService(3h) 未启用（hotness_3h_enabled=False）")
+
     # 5c.3：24h 实例（可选）
     if settings.hotness_24h_enabled:
         try:
@@ -407,6 +438,33 @@ def main() -> None:
             logger.info(
                 "AlertTriggerService(6h) 启动：growth_threshold={}",
                 settings.alert_6h_growth_threshold,
+            )
+
+        # ★ 3h 窗口告警实例（Phase 2.8 新增）
+        if settings.alert_3h_enabled:
+            alert_3h = AlertTriggerService(
+                db=db,
+                hotness_repo=hotness_repo,
+                telegram_client=telegram_client,
+                window_type="3h",
+                growth_threshold=settings.alert_3h_growth_threshold,
+                min_count_short=settings.alert_3h_min_count_short,
+                min_cross_source=settings.alert_3h_min_cross_source,
+                cooldown_minutes=settings.alert_cooldown_minutes,
+                escalation_growth_multiplier=settings.alert_escalation_growth_multiplier,
+                heartbeat_hours=settings.alert_heartbeat_hours,
+                growth_delta_pct=settings.alert_growth_delta_pct,
+                message_template=settings.alert_message_template,
+                display_timezone=settings.timezone,
+                exclude_entities=settings.alert_exclude_entities,
+                briefing_repo=_alert_briefing_repo,
+            )
+            alert_3h._alert_records = alert_service._alert_records
+            new_services.append(alert_3h)
+            alert_services.append(alert_3h)
+            logger.info(
+                "AlertTriggerService(3h) 启动：growth_threshold={}",
+                settings.alert_3h_growth_threshold,
             )
 
         # ★ 24h 窗口告警实例

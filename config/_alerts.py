@@ -181,6 +181,12 @@ class AlertSettings:
     alert_6h_min_count_short: int = 5
     alert_6h_min_cross_source: int = 1
 
+    # 3h 窗口告警（Phase 2.8 新增）。阈值介于 1h 与 6h 之间。
+    alert_3h_enabled: bool = True
+    alert_3h_growth_threshold: float = 7.0
+    alert_3h_min_count_short: int = 5
+    alert_3h_min_cross_source: int = 1
+
     # 24h 窗口告警是否启用（默认 ON：宏观叙事每天就那么 1~2 个，告警不会刷屏）
     alert_24h_enabled: bool = True
     # 24h growth 阈值最低（基线最稳定 → 任何明显变化都值得通知）
@@ -207,8 +213,8 @@ class AlertSettings:
     # 的所有大币。命中比较时大小写不敏感（service 内部 .upper()）。
     # ==========================================================================
     alert_exclude_entities: tuple[str, ...] = (
-        "BTC", "ETH", "SOL", "BNB",
-        "USDT", "USDC", "DAI","OP","UNI","Solana"
+        # "BTC", "ETH", "SOL", "BNB",
+        # "USDT", "USDC", "DAI","OP","UNI","Solana"
     )
 
     # ==========================================================================
@@ -236,5 +242,5 @@ class AlertSettings:
     digest_push_every_quarters: int = 1
 
     # digest 推送哪些窗口（按 tuple 顺序拼接到同一条消息）。
-    # 默认 ("1h","6h","24h") 三个全推；用户可只推 1h 或只推 24h
-    digest_window_types: tuple[str, ...] = ("1h", "6h", "24h")
+    # 默认 ("1h","3h","6h","24h") 四个全推；用户可只推 1h 或只推 24h
+    digest_window_types: tuple[str, ...] = ("1h", "3h", "6h", "24h")

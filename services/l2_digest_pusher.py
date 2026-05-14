@@ -40,12 +40,13 @@ from notifications.telegram_client import TelegramClient
 from services.l2_hotness import align_to_quarter
 
 
-# 默认推送的窗口列表（按 1h → 6h → 24h 顺序拼到同一条消息里）
-_DEFAULT_WINDOW_TYPES: tuple[str, ...] = ("1h", "6h", "24h")
+# 默认推送的窗口列表（按 1h → 3h → 6h → 24h 顺序拼到同一条消息里）
+_DEFAULT_WINDOW_TYPES: tuple[str, ...] = ("1h", "3h", "6h", "24h")
 
 # 单条 Telegram 消息渲染窗口标题 + 行模板
 _SECTION_HEADER = {
     "1h": "🔥 1h 榜（短期突变）",
+    "3h": "🌅 3h 榜（中短期热度）",
     "6h": "📈 6h 榜（中期趋势）",
     "24h": "🌐 24h 榜（宏观叙事）",
 }
