@@ -294,3 +294,169 @@ ORDER BY day DESC, window_type;
 3. 接受"调参是季度复盘事项，不是每天的事"
 
 我们准备一起调参那天，按这个方法论走，最多 30 分钟就能把 4 个核心阈值定下来。
+
+
+---
+
+## 7. 漏斗式调试：从原始消息到 Telegram 告警
+
+> 前面 6 节是"出口侧调参"——你接受流水线，只调最后的阈值。
+> 这一节是"漏斗侧调试"——当你觉得"明明该有信号怎么没出来"时，
+> 用这个方法定位**问题在哪一层**。
+
+### 7.1 流水线 7 层全景
+
+消息从原始抓取到 Telegram 告警，要穿过 7 层。每一层都可能筛掉数据，
+也都对应不同的配置参数：
+
+```
+┌─ 原始抓取（外部，不是本项目控制）
+│   twitter_posts / binance_square_posts / discord_messages
+│
+├─ ① NormalizerService           参数：normalizer_batch_size
+│   筛选：几乎不筛，只是搬运 + 字段统一
+│
+├─ ② Deduplicator (SimHash 去重)  参数：dedup_hamming_threshold / dedup_window_hours
+│   筛选：重复消息 → is_duplicate=TRUE，不送下游
+│
+├─ ③ prefilter.classify           参数：无（规则在 services/prefilter.py 硬编码）
+│   筛选：长度 < 20 直接 drop；命中"梭哈/亏麻"等噪音模式 drop
+│        含 $TICKER 或词典命中 → 强 keep
+│
+├─ ④ 实体抽取（正则 + 词典）       参数：dictionaries/*.yaml 内容
+│   筛选：keep 的消息里抠出 entity；抠不到的不写 entity_mentions
+│
+├─ ⑤ SlidingCounter（内存计数）   参数：WINDOWS_SECONDS（不需要调）
+│   筛选：不筛，只统计
+│
+├─ ⑥ HotnessService（每 15 分钟）  参数：hotness_*_smoothing / baseline / exclude / top_k
+│   筛选：count_short=0 跳过；exclude 黑名单跳过；
+│        基线样本 < min_baseline_count 整轮跳过；只留 top_k 条
+│
+├─ ⑦ AlertTriggerService          参数：alert_*_growth_threshold / cooldown / exclude
+│   筛选：三道门槛 + 4 路径决策树 + 全局 alert_exclude_entities
+│
+└─ Telegram 推送
+```
+
+### 7.2 用 pipeline_inspect.py 一眼看清
+
+```bash
+.venv/bin/python scripts/pipeline_inspect.py --hours 6
+```
+
+这个工具会帮你算出**每一层的输入 / 输出 / 转化率**，输出 4 段：
+
+1. **🚿 消息漏斗**：原始 → 归一化 → 去重 → 抽实体 各层数字 + 进度条
+2. **🏷 实体类型分布**：ticker/chain/narrative/project 占比，看词典命中分布
+3. **📈 hotness → 告警**：每个窗口写入了多少快照，多少通过当前阈值
+4. **🔬 异常诊断**：自动给出问题层级 + 改哪个参数的建议
+
+### 7.3 典型异常和对应参数
+
+| 现象 | 哪一层有问题 | 改哪个参数 |
+|---|---|---|
+| 原始三张表过去时段都没新数据 | 上游抓取（外部）| 不是项目控制，去查抓取服务 |
+| 归一化产出率 < 50% | ① Normalizer 跟不上 | `normalizer_batch_size` 调大；`poll_interval_seconds` 调小 |
+| 去重率 > 60% | ② SimHash 太松 | `dedup_hamming_threshold` 从 3 调到 2 |
+| 去重率 < 5% 但流量正常 | ② SimHash 太严或漏判 | `dedup_hamming_threshold` 从 3 调到 4 |
+| 实体抽取覆盖率 < 10% | ④ 词典 + prefilter 不够 | 看 🏷 分布；补 `dictionaries/*.yaml` |
+| 词典命中率 < 30% | ④ 多数命中靠正则 $XXX | 把高频新币加到 `tickers.yaml`（运行一周后再补）|
+| hotness 一直跳过（日志 `hotness skipped`）| ⑥ 基线不足 | `hotness_min_baseline_count` 调小（冷启动期）|
+| 1h 榜全是某几个大币 | ⑥ exclude 黑名单不够 | `hotness_exclude_entities` 加币 |
+| 24h 榜全是 ETH 推送 | ⑦ alert 黑名单空 | `alert_exclude_entities` 加 BTC/ETH 等 |
+| 阈值看起来对，但告警还是 0 | ⑦ cooldown 撞到 | 第一条 [首次] 后 60 分钟冷却中；或 `alert_min_count_short` 过严 |
+
+### 7.4 漏斗调试流程
+
+每次出问题，按这个顺序走：
+
+```
+跑 pipeline_inspect.py
+   ↓
+看哪一层数字异常（红字 ⚠️）
+   ↓
+对照 §7.3 改对应参数
+   ↓
+重启 → 24~48 小时后再跑
+   ↓
+对比前后转化率，确认改对了
+```
+
+不要一上来就改阈值。**80% 的"告警太少"问题不在阈值，在前面层级**。
+比如你的实体抽取覆盖率只有 18%，意味着 82% 的消息进库了但抽不到 entity——
+再怎么调阈值也是无米之炊。
+
+### 7.5 两个工具的分工
+
+| 工具 | 看什么 | 何时用 |
+|---|---|---|
+| `pipeline_inspect.py` | 漏斗每层转化率 | 觉得"信号该有的没出来"，先用这个定位问题层 |
+| `tune_helper.py`      | 出口 growth 分布 | 流水线 OK，只想精调阈值（§2 那套方法）|
+
+**典型工作流**（我们调参那天会走这套）：
+
+1. `pipeline_inspect.py --hours 6`：先确认管道健康，问题不在前面层级
+2. 如果有 ⚠️：按 §7.3 改前面层级的参数（词典/批量/dedup 阈值），重启
+3. 等 24~48 小时积累新数据
+4. `pipeline_inspect.py --hours 24`：再次确认前面层级正常
+5. `tune_helper.py --days 7`：看出口分布，按 ~5 条/天那一列填阈值
+6. 重启，再等 24~48 小时收尾验证
+
+### 7.6 不用 pipeline_inspect.py 也行：手写 SQL
+
+如果你想用 SQL 直接查每一层（比如服务还没起来、想在远端 DB 看），核心 6 条：
+
+```sql
+-- ① 过去 1h 三张原始表新增量
+SELECT 'twitter' AS src, COUNT(*) FROM twitter_posts WHERE created_at >= NOW()-INTERVAL '1h'
+UNION ALL
+SELECT 'binance_square', COUNT(*) FROM binance_square_posts WHERE created_at >= NOW()-INTERVAL '1h'
+UNION ALL
+SELECT 'discord', COUNT(*) FROM discord_messages WHERE created_at >= NOW()-INTERVAL '1h';
+
+-- ② 过去 1h normalized_messages 新增 + 去重比例
+SELECT is_duplicate, COUNT(*)
+FROM normalized_messages
+WHERE created_at >= NOW() - INTERVAL '1h'
+GROUP BY is_duplicate;
+
+-- ③ 过去 1h 至少抽到 1 个实体的消息数
+SELECT COUNT(DISTINCT msg_id) FROM entity_mentions WHERE ts >= NOW() - INTERVAL '1h';
+
+-- ④ 过去 1h 词典 / 正则命中比例
+SELECT
+  CASE WHEN confidence = 1.0 THEN '词典' ELSE '正则' END AS hit_type,
+  entity_type,
+  COUNT(*)
+FROM entity_mentions
+WHERE ts >= NOW() - INTERVAL '1h'
+GROUP BY hit_type, entity_type
+ORDER BY COUNT(*) DESC;
+
+-- ⑤ 过去 1h hotness 写入了多少快照
+SELECT window_type, COUNT(*) AS snapshots, COUNT(DISTINCT entity) AS entities
+FROM hotness_snapshots
+WHERE window_end >= NOW() - INTERVAL '1h'
+GROUP BY window_type;
+
+-- ⑥ 过去 1h 各窗口 growth ≥ 当前阈值的快照数
+-- （把 2.0 / 5.0 / 5.0 / 3.0 换成你 _alerts.py 里的实际值）
+SELECT
+  COUNT(*) FILTER (WHERE window_type='1h'  AND growth_rate >= 2.0) AS h1_pass,
+  COUNT(*) FILTER (WHERE window_type='3h'  AND growth_rate >= 5.0) AS h3_pass,
+  COUNT(*) FILTER (WHERE window_type='6h'  AND growth_rate >= 5.0) AS h6_pass,
+  COUNT(*) FILTER (WHERE window_type='24h' AND growth_rate >= 3.0) AS h24_pass
+FROM hotness_snapshots
+WHERE window_end >= NOW() - INTERVAL '1h';
+```
+
+这 6 条 SQL 就是 `pipeline_inspect.py` 的核心查询，纯 psql 也能用。
+
+### 7.7 一句话结论
+
+**不知道阈值该多少 → 用 tune_helper.py（出口侧）；
+不知道为什么没告警 → 先用 pipeline_inspect.py（漏斗侧）。**
+
+调参的本质是把"系统体感"换成"数据反馈"，两个工具配合 5 分钟就能定位 90%
+的"告警太少 / 太吵 / 错过真信号"问题。

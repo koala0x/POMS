@@ -105,7 +105,8 @@ EntityExtractor 内部 hook：
 │   └── l5_briefing.py               # LLM 定向简报
 ├── scripts/
 │   ├── check_status.py              # 一键自检：跑一遍 SQL 看系统在不在干活
-│   └── tune_helper.py               # 调参诊断：看 growth 分布 + 推荐阈值
+│   ├── tune_helper.py               # 调参诊断：看 growth 分布 + 推荐阈值
+│   └── pipeline_inspect.py          # 漏斗诊断：每层转化率 + 异常定位
 ├── docs/
 │   ├── operations_guide.md          # 日常运维 + 调试
 │   ├── faq_design_decisions.md      # 设计决策 Q&A
@@ -183,7 +184,7 @@ source .venv/bin/activate
 |---|---|
 | `docs/operations_guide.md` | 日常运维、调参、出问题排查（最常翻） |
 | `docs/configuration.md` | **配置参数速查表**（73 个参数按 service 分组）|
-| `docs/tuning_guide.md` | **调参方法论**（不知道阈值该设多少时看，配合 `tune_helper.py`）|
+| `docs/tuning_guide.md` | **调参方法论**（不知道阈值该设多少时看，配合 `tune_helper.py` 和 `pipeline_inspect.py`）|
 | `docs/faq_design_decisions.md` | 设计决策"为什么"（Q1~Q12，含老链路淘汰说明）|
 | `文档/终极设计文档.md` | 项目早期 v3.0 整合设计文档（历史归档）|
 | `docs/faq_design_decisions.md` | 设计决策"为什么"（Q1~Q11，含老链路淘汰说明） |
