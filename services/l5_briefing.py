@@ -27,6 +27,7 @@ LLM 推理慢（CPU 模式 ~30s/次，Top-5 一轮 ~2 分钟），不能阻塞�
 """
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -56,6 +57,42 @@ _SENTIMENT_VALUES = {"bullish", "bearish", "neutral"}
 
 # 单条消息文本截断长度（spec Req 4.4：Twitter 一条 280 / 长文截断到 300）
 _MAX_MSG_TEXT_LEN = 300
+
+
+# Ollama 结构化输出（JSON Schema）。
+# - 传给 OllamaClient.chat(format=...)，Ollama 解码时强制约束字段名 / 类型 / 枚举值，
+#   能从源头消除本地小模型常见的"sentiment: neutral"（裸枚举值无引号）失败模式
+# - 所有字段都允许 null（spec Req 3.3）
+# - sentiment 严格走 enum，避免出现 "Bullish"/"中性" 等离群值
+# - 见 https://ollama.com/blog/structured-outputs
+_BRIEFING_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "narrative": {"type": ["string", "null"]},
+        "catalyst": {"type": ["string", "null"]},
+        "fund_logic": {"type": ["string", "null"]},
+        "sentiment": {
+            "type": ["string", "null"],
+            "enum": ["bullish", "bearish", "neutral", None],
+        },
+        "confidence": {"type": ["number", "null"]},
+    },
+    "required": [
+        "narrative",
+        "catalyst",
+        "fund_logic",
+        "sentiment",
+        "confidence",
+    ],
+    "additionalProperties": False,
+}
+
+
+# 非法 JSON 兜底：把 "sentiment": neutral 这类裸枚举值修成 "neutral"
+# 仅在 json.loads 失败时启用，命中即重试一次解析（不影响正常路径）
+_BARE_ENUM_RE = re.compile(
+    r'("sentiment"\s*:\s*)(bullish|bearish|neutral)(\s*[,}\]])'
+)
 
 
 @dataclass
@@ -215,9 +252,14 @@ class BriefingService:
         )
 
         # 调 LLM（self.ollama.chat 内部已 try/except，失败抛 RuntimeError）
+        # 传 JSON Schema 走 Ollama 结构化输出：保证返回的字符串本身就是合法 JSON，
+        # 且 sentiment 字段被约束在 {bullish, bearish, neutral, null} 内，
+        # 从源头规避"sentiment: neutral"（裸枚举值缺引号）这类解析失败
         t0 = time.time()
         try:
-            response = self.ollama.chat(prompt)
+            response = self.ollama.chat(
+                prompt, response_format=_BRIEFING_JSON_SCHEMA
+            )
         except Exception as e:
             logger.warning("briefing LLM call failed: entity={} err={}", entity, e)
             return False
@@ -419,7 +461,17 @@ class BriefingService:
         try:
             data = json.loads(text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"JSON 解析失败: {e}") from e
+            # 兜底：本地小模型偶尔会输出 "sentiment": neutral（枚举值漏引号），
+            # 在传 JSON Schema 之后通常被 Ollama 屏蔽，但旧版 / 兼容层可能漏掉。
+            # 这里只针对已知模式做一次保守修复，命中失败仍按原异常上抛
+            repaired = _BARE_ENUM_RE.sub(r'\1"\2"\3', text)
+            if repaired != text:
+                try:
+                    data = json.loads(repaired)
+                except json.JSONDecodeError:
+                    raise ValueError(f"JSON 解析失败: {e}") from e
+            else:
+                raise ValueError(f"JSON 解析失败: {e}") from e
 
         if not isinstance(data, dict):
             raise ValueError(f"期望 JSON object，实际类型 {type(data).__name__}")

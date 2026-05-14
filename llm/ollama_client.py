@@ -14,9 +14,17 @@ Ollama HTTP 客户端封装。
 """
 
 from dataclasses import dataclass
+from typing import Any, Union
 
 import requests
 from loguru import logger
+
+
+# response_format 支持两种形态：
+#   - "json"        → Ollama JSON 模式（保证合法 JSON，但不约束字段）
+#   - dict          → JSON Schema（强约束字段名 / 类型 / 枚举值，推荐）
+# 见 https://ollama.com/blog/structured-outputs
+ResponseFormat = Union[str, dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -45,7 +53,11 @@ class OllamaClient:
     num_ctx: int = 16384
     num_predict: int = -1
 
-    def chat(self, prompt: str) -> str:
+    def chat(
+        self,
+        prompt: str,
+        response_format: ResponseFormat | None = None,
+    ) -> str:
         """
         调用 Ollama 生成回复文本。
 
@@ -56,28 +68,42 @@ class OllamaClient:
           ...
         }
 
+        参数 response_format(可选):
+        - 不传 / None:自由文本输出
+        - "json":JSON 模式,Ollama 在解码时屏蔽掉所有非合法 JSON token,
+          保证 message.content 一定能被 json.loads 解析(但字段不约束)
+        - dict (JSON Schema):更强的结构化约束,字段名 / 类型 / 枚举值都按
+          schema 走。本地小模型(如 qwen3)对自然语言中的引号 / 枚举值
+          遵循度有限,传 schema 后能从源头消除"sentiment: neutral"
+          (没引号)这类失败模式。
+
         失败行为:任何异常(超时 / 连接错 / 5xx / JSON 解析失败 / 空内容)都
         **直接抛错、不重试**。重试只会让本地模型前的请求堆积,整条流水线卡死。
         上层 worker 捕获后跳过本轮,下次轮询到这一批数据再试一次即可。
         """
         url = self.base_url.rstrip("/") + "/api/chat"
 
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "stream": False,
+            "think": self.enable_thinking,
+            "options": {
+                "num_ctx": self.num_ctx,
+                "num_predict": self.num_predict,
+            },
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if response_format is not None:
+            payload["format"] = response_format
+
         try:
             # stream=False:一次性返回完整文本,便于后续写库/标记幂等
             # think=False:关闭 qwen3 推理链,直接给答案,推理时长缩短数倍
             # num_ctx / num_predict:见 docstring,关键性能参数
+            # format:见上方 response_format 说明,JSON 模式 / JSON Schema 都走这一字段
             resp = requests.post(
                 url,
-                json={
-                    "model": self.model,
-                    "stream": False,
-                    "think": self.enable_thinking,
-                    "options": {
-                        "num_ctx": self.num_ctx,
-                        "num_predict": self.num_predict,
-                    },
-                    "messages": [{"role": "user", "content": prompt}],
-                },
+                json=payload,
                 timeout=self.timeout_seconds,
             )
             resp.raise_for_status()

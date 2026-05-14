@@ -500,6 +500,28 @@ def test_parse_json_strips_markdown_code_block(sqlite_db, prompt_path) -> None:
     assert out["sentiment"] == "neutral"
 
 
+def test_parse_json_repairs_unquoted_sentiment_enum(sqlite_db, prompt_path) -> None:
+    """
+    本地小模型偶尔输出 "sentiment": neutral（裸枚举值漏引号），
+    解析器应能用兜底正则修复一次再 json.loads。
+    对应线上报错：JSON 解析失败: Expecting value: line 5 column 16
+    """
+    svc = _make_service(sqlite_db, prompt_path)
+    raw = (
+        '{\n'
+        '  "narrative": null,\n'
+        '  "catalyst": null,\n'
+        '  "fund_logic": null,\n'
+        '  "sentiment": neutral,\n'
+        '  "confidence": 0.0\n'
+        '}'
+    )
+    out = svc._parse_json(raw)
+    assert out["sentiment"] == "neutral"
+    assert out["confidence"] == 0.0
+    assert out["narrative"] is None
+
+
 def test_parse_json_invalid_raises(sqlite_db, prompt_path) -> None:
     """
     Req 3.3 / 5.3：非法 JSON 应 raise ValueError。
