@@ -146,6 +146,8 @@ class DigestPusherService:
                 for wt in self.window_types:
                     section = self._render_window_section(session, window_type=wt)
                     sections.append(section)
+                # 数据源命中率统计（过去 1h 的 normalized_messages vs entity_mentions）
+                source_stats = self._fetch_source_stats(session)
         except Exception as e:
             # DB 读失败：log error 后跳过本轮；不更新 _last_pushed_window_end
             # 让下一轮还能重试（同一 window_end 再来一次）
@@ -157,6 +159,10 @@ class DigestPusherService:
         # 但 align_to_quarter 用 .replace(...) 不破坏 tzinfo，保险起见再转一次
         header = f"📊 *热榜快照* @ {self._fmt_local(window_end)}\n"
         body = header + "\n\n".join(sections)
+
+        # 追加数据源命中率
+        if source_stats:
+            body += "\n\n" + source_stats
 
         # 推 Telegram；用 Markdown parse_mode 让标题加粗 + 实体名走 code 块
         ok = self.telegram_client.send_text(body, parse_mode="Markdown")
@@ -204,6 +210,51 @@ class DigestPusherService:
         lines = [f"*{header}*  _（@ {self._fmt_local(latest, time_only=True)}）_"]
         for rec in records:
             lines.append(self._format_record_line(rec))
+        return "\n".join(lines)
+
+    def _fetch_source_stats(self, session) -> str:
+        """
+        统计过去 1h 每个数据源的消息总数 vs 命中实体的消息数，渲染成 Markdown 段落。
+
+        "命中"定义：该 raw_source 的 normalized_message 在 entity_mentions 里
+        至少有 1 条记录（即 prefilter keep + 词典/正则抽到了实体）。
+
+        返回空字符串表示查不到数据（不追加到消息里）。
+        """
+        from sqlalchemy import text
+
+        try:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT
+                      nm.raw_source,
+                      COUNT(*) AS total,
+                      COUNT(DISTINCT em.msg_id) AS hit
+                    FROM normalized_messages nm
+                    LEFT JOIN entity_mentions em
+                      ON em.msg_id = nm.id
+                      AND em.ts >= NOW() - INTERVAL '1 hour'
+                    WHERE nm.created_at >= NOW() - INTERVAL '1 hour'
+                      AND nm.is_duplicate = FALSE
+                    GROUP BY nm.raw_source
+                    ORDER BY total DESC
+                    """
+                )
+            ).all()
+        except Exception as e:
+            logger.warning("digest source stats query failed: {}", e)
+            return ""
+
+        if not rows:
+            return ""
+
+        lines = ["📡 *数据源概况*（过去 1h）"]
+        for r in rows:
+            total = int(r.total)
+            hit = int(r.hit)
+            pct = f"{100.0 * hit / total:.1f}%" if total > 0 else "-"
+            lines.append(f"  {r.raw_source:<18} {total:>4} 条 → 命中 {hit} 条（{pct}）")
         return "\n".join(lines)
 
     def _fmt_local(self, dt, *, time_only: bool = False) -> str:
