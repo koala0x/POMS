@@ -194,7 +194,7 @@ class NewPipelineSettings:
     # 24h 黑名单：默认**不屏蔽** BTC/ETH/SOL/BNB——24h 维度它们的 growth 突变是真信号
     # 仅屏蔽稳定币（USDT/USDC/DAI 在任何窗口都不该上榜）
     hotness_24h_exclude_entities: tuple[str, ...] = (
-        "USDT", "USDC", "DAI", "OP", "UNI", "Solana"
+        "USDT", "USDC", "DAI"
     )
 
     # ==========================================================================
