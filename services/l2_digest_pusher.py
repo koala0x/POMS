@@ -254,7 +254,9 @@ class DigestPusherService:
             total = int(r.total)
             hit = int(r.hit)
             pct = f"{100.0 * hit / total:.1f}%" if total > 0 else "-"
-            lines.append(f"  {r.raw_source:<18} {total:>4} 条 → 命中 {hit} 条（{pct}）")
+            # 转义 raw_source 里的 _ 避免破坏 Telegram Markdown（如 binance_square）
+            source_name = r.raw_source.replace("_", "\\_")
+            lines.append(f"  {source_name:<18} {total:>4} 条 → 命中 {hit} 条（{pct}）")
         return "\n".join(lines)
 
     def _fmt_local(self, dt, *, time_only: bool = False) -> str:
