@@ -55,15 +55,16 @@ class PushPlusClient:
     token: str
     timeout_seconds: int = 10
     # 消息模板：markdown / html / txt / json。推荐 markdown，微信端渲染效果好
-    template: str = "markdown"
+    template: str = "txt"
 
-    def send_text(self, text: str, *, title: str = "PomsAI 通知") -> bool:
+    def send_text(self, text: str, *, title: str = "PomsAI 通知", **kwargs) -> bool:
         """
         发送消息到微信。
 
         参数：
             text: 消息正文（支持 Markdown 格式）。超长自动截断。
             title: 消息标题（微信通知栏显示）。
+            **kwargs: 兼容其他 client 的参数（如 parse_mode），静默忽略。
 
         返回：
             True  推送成功（API code=200）
