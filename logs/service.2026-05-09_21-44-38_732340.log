@@ -1,0 +1,28 @@
+2026-05-09 22:04:01.147 | INFO     | __main__:_build_app:81 - ingest 服务数据库初始化完成
+2026-05-09 22:04:01.150 | INFO     | scheduler.twitter_fetcher_loop:_loop:67 - twitter fetcher loop 启动:间隔 1800s,单轮最多尝试 3 次,重试间隔 180s
+2026-05-09 22:04:01.152 | INFO     | __main__:main:96 - Twitter 抓取后台 loop 已启动:间隔 1800s,List=1898760983553974442 max_pages=20 retry=3x@180s
+2026-05-09 22:04:01.241 | INFO     | services.twitter_fetcher_service:run_once:122 - Twitter 抓取开始: list_id=1898760983553974442 max_pages=20 已知 tweet_id=336
+2026-05-09 22:04:01.242 | INFO     | services.twitter_fetcher_service:_fetch_pages:187 - 拉取第 1 页, cursor=''
+2026-05-09 22:04:03.538 | INFO     | services.twitter_fetcher_service:_fetch_pages:187 - 拉取第 2 页, cursor='DAABCgABHH4gGFy__6wKAAIcfb3z0NqAdQgAAwAAAAIAAA'
+2026-05-09 22:04:05.638 | INFO     | services.twitter_fetcher_service:_fetch_pages:187 - 拉取第 3 页, cursor='DAABCgABHH4gGFy__2oKAAIcfXwSuZtBaggAAwAAAAIAAA'
+2026-05-09 22:04:07.639 | INFO     | services.twitter_fetcher_service:run_once:140 - 命中已知 tweet_id=2052830645680996595,早停翻页
+2026-05-09 22:04:08.266 | INFO     | services.twitter_fetcher_service:run_once:153 - Twitter 抓取完成: 收到 135 条新推文,实际入库 135 条
+2026-05-09 22:20:00.961 | INFO     | api.server:ingest:55 - /ingest source=binance_square inserted=1
+2026-05-09 22:21:27.558 | INFO     | api.server:ingest:55 - /ingest source=binance_square inserted=20
+2026-05-09 22:23:38.972 | INFO     | api.server:ingest:55 - /ingest source=binance_square inserted=20
+2026-05-09 22:34:08.376 | INFO     | services.twitter_fetcher_service:run_once:122 - Twitter 抓取开始: list_id=1898760983553974442 max_pages=20 已知 tweet_id=471
+2026-05-09 22:34:08.378 | INFO     | services.twitter_fetcher_service:_fetch_pages:187 - 拉取第 1 页, cursor=''
+2026-05-09 22:34:10.835 | INFO     | services.twitter_fetcher_service:run_once:140 - 命中已知 tweet_id=2053109809705304095,早停翻页
+2026-05-09 22:34:11.246 | INFO     | services.twitter_fetcher_service:run_once:153 - Twitter 抓取完成: 收到 4 条新推文,实际入库 4 条
+2026-05-09 22:43:38.810 | INFO     | api.server:ingest:55 - /ingest source=binance_square inserted=20
+2026-05-09 23:01:15.205 | INFO     | api.server:ingest:55 - /ingest source=binance_square inserted=20
+2026-05-09 23:04:11.445 | INFO     | services.twitter_fetcher_service:run_once:122 - Twitter 抓取开始: list_id=1898760983553974442 max_pages=20 已知 tweet_id=475
+2026-05-09 23:04:11.446 | INFO     | services.twitter_fetcher_service:_fetch_pages:187 - 拉取第 1 页, cursor=''
+2026-05-09 23:04:14.138 | INFO     | services.twitter_fetcher_service:run_once:140 - 命中已知 tweet_id=2053119923464077817,早停翻页
+2026-05-09 23:04:14.244 | INFO     | services.twitter_fetcher_service:run_once:153 - Twitter 抓取完成: 收到 6 条新推文,实际入库 6 条
+2026-05-09 23:20:20.830 | INFO     | api.server:ingest:55 - /ingest source=binance_square inserted=20
+2026-05-09 23:34:14.425 | INFO     | services.twitter_fetcher_service:run_once:122 - Twitter 抓取开始: list_id=1898760983553974442 max_pages=20 已知 tweet_id=481
+2026-05-09 23:34:14.426 | INFO     | services.twitter_fetcher_service:_fetch_pages:187 - 拉取第 1 页, cursor=''
+2026-05-09 23:34:16.873 | INFO     | services.twitter_fetcher_service:run_once:140 - 命中已知 tweet_id=2053128293482909707,早停翻页
+2026-05-09 23:34:17.024 | INFO     | services.twitter_fetcher_service:run_once:153 - Twitter 抓取完成: 收到 8 条新推文,实际入库 8 条
+2026-05-09 23:36:03.227 | INFO     | api.server:ingest:55 - /ingest source=binance_square inserted=20

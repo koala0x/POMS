@@ -21,3 +21,4 @@ venv/
 .env.*
 .DS_Store
 #config/poms_worker.ini
+.idea/*.iml
