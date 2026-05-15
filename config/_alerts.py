@@ -232,7 +232,7 @@ class AlertSettings:
     # ==========================================================================
     alert_exclude_entities: tuple[str, ...] = (
         "BTC", "ETH", "SOL", "BNB",
-        "USDT", "USDC", "DAI",
+        "USDT", "USDC", "DAI", "OP"
     )
 
     # ==========================================================================
@@ -257,7 +257,7 @@ class AlertSettings:
     #   2 = 每 30min 一次（半小时整点）
     #   4 = 每小时一次（每小时 :00 整点；默认）
     # 默认 4 平衡"信息密度"和"刷屏感"；用户嫌少改 2，调试改 1
-    digest_push_every_quarters: int = 1
+    digest_push_every_quarters: int = 4
 
     # digest 推送哪些窗口（按 tuple 顺序拼接到同一条消息）。
     # 默认 ("1h","3h","6h","24h") 四个全推；用户可只推 1h 或只推 24h
