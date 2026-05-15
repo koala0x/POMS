@@ -7756,3 +7756,214 @@
 2026-05-15 18:07:38.298 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
 2026-05-15 18:07:38.457 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
 2026-05-15 18:07:38.457 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:08:08.982 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:08:09.147 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:08:09.148 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:08:39.352 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:08:39.539 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:08:39.540 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:09:09.864 | INFO     | services.l0_normalizer:run_once:141 - normalizer 本轮：扫描 2 条（tw=0 bn=2 dc=0）→ 写入 2 条（重复 0 条，空内容跳过 0 条）
+2026-05-15 18:09:10.457 | INFO     | services.l1_entity_extractor:run_once:154 - entity_extractor 本轮：处理 2 条消息 → 产出 1 条实体提及
+2026-05-15 18:09:10.458 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:09:11.644 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:09:11.765 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:09:11.923 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:09:11.924 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:09:42.710 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:09:42.946 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:09:42.947 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:10:13.491 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:10:13.693 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:10:13.694 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:10:43.885 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:10:44.091 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:10:44.092 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:11:14.534 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:11:14.708 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:11:14.709 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:11:44.942 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:11:45.125 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:11:45.127 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:12:15.852 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:12:16.595 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:12:16.596 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:12:47.414 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:12:47.604 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:12:47.605 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:13:18.449 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:13:18.641 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:13:18.642 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:13:48.861 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:13:49.042 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:13:49.043 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:14:19.332 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:14:19.496 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:14:19.497 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:14:49.804 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:14:50.045 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:14:50.045 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:15:21.577 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:15:00+08:00 top_k=9 elapsed=0.9s
+2026-05-15 18:15:25.635 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:15:00+08:00 top_k=20 elapsed=4.0s
+2026-05-15 18:15:26.975 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:15:00+08:00 top_k=18 elapsed=1.3s
+2026-05-15 18:15:35.646 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:15:00+08:00 top_k=20 elapsed=8.6s
+2026-05-15 18:15:36.294 | INFO     | services.l3_cooccurrence:run_once:275 - cooccur window_end=2026-05-15 18:15:00+08:00 pairs_written=10 new_pairs=2 elapsed=0.6s
+2026-05-15 18:15:37.407 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=HYPE 60min 内无质变
+2026-05-15 18:15:37.408 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=LAB 60min 内无质变
+2026-05-15 18:15:37.408 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=BILL 60min 内无质变
+2026-05-15 18:15:37.567 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=HYPE 60min 内无质变
+2026-05-15 18:15:59.432 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=0x44b28991b167582f18ba0259e0173176ca125505 narrative=None catalyst=None confidence=0.0 elapsed=21.6s
+2026-05-15 18:16:16.874 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=82ZmPRVn89XSmbK4dsqFwgTmr9xDBS7be7sjdBn6pump narrative=None catalyst=None confidence=0.8 elapsed=17.2s
+2026-05-15 18:16:33.522 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=COPIUM narrative=None catalyst=None confidence=0.5 elapsed=16.5s
+2026-05-15 18:16:50.786 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=OP narrative=None catalyst=None confidence=0.6 elapsed=17.0s
+2026-05-15 18:17:10.895 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=UNI narrative=None catalyst=None confidence=0.8 elapsed=19.9s
+2026-05-15 18:17:26.963 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=XAG narrative=None catalyst=None confidence=0.8 elapsed=15.9s
+2026-05-15 18:17:43.345 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=XAU narrative=None catalyst=None confidence=0.8 elapsed=16.0s
+2026-05-15 18:18:04.181 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=XRP narrative=None catalyst=None confidence=0.9 elapsed=20.5s
+2026-05-15 18:18:25.356 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=币安人生 narrative=None catalyst=None confidence=0.8 elapsed=20.5s
+2026-05-15 18:18:25.826 | INFO     | services.l0_normalizer:run_once:141 - normalizer 本轮：扫描 7 条（tw=0 bn=7 dc=0）→ 写入 7 条（重复 0 条，空内容跳过 0 条）
+2026-05-15 18:18:25.915 | INFO     | services.l1_entity_extractor:run_once:154 - entity_extractor 本轮：处理 7 条消息 → 产出 6 条实体提及
+2026-05-15 18:18:25.915 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:18:26.073 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:18:26.205 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:18:26.346 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:18:26.346 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:18:56.833 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:18:57.646 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:18:57.647 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:19:28.333 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:19:29.644 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:19:29.644 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:20:00.593 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:20:00.828 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:20:00.829 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:20:31.727 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:20:32.645 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:20:32.646 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:21:03.457 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:21:03.613 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:21:03.614 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:21:33.725 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:21:33.879 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:21:33.880 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:22:04.886 | INFO     | services.l0_normalizer:run_once:141 - normalizer 本轮：扫描 5 条（tw=0 bn=5 dc=0）→ 写入 5 条（重复 0 条，空内容跳过 0 条）
+2026-05-15 18:22:05.588 | INFO     | services.l1_entity_extractor:run_once:154 - entity_extractor 本轮：处理 5 条消息 → 产出 4 条实体提及
+2026-05-15 18:22:05.588 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:22:06.051 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:22:06.148 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:22:06.287 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:22:06.287 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:22:36.456 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:22:36.641 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:22:36.643 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:23:07.652 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:23:08.077 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:23:08.077 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:23:38.890 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:23:40.898 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:23:40.922 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:24:11.755 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:24:13.308 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:24:13.309 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:24:43.459 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:24:43.618 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:24:43.619 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:25:13.838 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:25:14.005 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:25:14.006 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:25:44.265 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:25:45.046 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:25:45.047 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:26:15.868 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:26:16.391 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:26:16.392 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:26:46.589 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:26:46.734 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:26:46.735 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:27:16.866 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:27:17.023 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:27:17.023 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:27:47.248 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:27:47.401 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:27:47.402 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:28:17.590 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:28:17.818 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:28:17.819 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:28:48.182 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:28:48.353 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:28:48.353 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:29:18.734 | INFO     | services.l0_normalizer:run_once:141 - normalizer 本轮：扫描 7 条（tw=0 bn=7 dc=0）→ 写入 7 条（重复 0 条，空内容跳过 0 条）
+2026-05-15 18:29:18.959 | INFO     | services.l1_entity_extractor:run_once:154 - entity_extractor 本轮：处理 7 条消息 → 产出 3 条实体提及
+2026-05-15 18:29:18.960 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:29:19.236 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:29:19.339 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:29:19.541 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:29:19.542 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:29:49.798 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:29:50.039 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:29:50.039 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:30:21.180 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:30:00+08:00 top_k=2 elapsed=0.6s
+2026-05-15 18:30:24.774 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:30:00+08:00 top_k=20 elapsed=3.5s
+2026-05-15 18:30:26.355 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:30:00+08:00 top_k=17 elapsed=1.5s
+2026-05-15 18:30:36.277 | INFO     | services.l2_hotness:run_once:248 - hotness window_end=2026-05-15 18:30:00+08:00 top_k=20 elapsed=9.9s
+2026-05-15 18:30:37.743 | WARNING  | services.l3_cooccurrence:run_once:270 - cooccur run_once 慢速：1.4s（>1s 警告，window_end=2026-05-15 18:30:00+08:00）
+2026-05-15 18:30:37.744 | INFO     | services.l3_cooccurrence:run_once:275 - cooccur window_end=2026-05-15 18:30:00+08:00 pairs_written=11 new_pairs=2 elapsed=1.4s
+2026-05-15 18:30:37.860 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=HYPE 60min 内无质变
+2026-05-15 18:30:37.861 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=LAB 60min 内无质变
+2026-05-15 18:30:37.861 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=BILL 60min 内无质变
+2026-05-15 18:30:37.971 | INFO     | services.l2_alert_trigger:run_once:282 - alert skipped: entity=HYPE 60min 内无质变
+2026-05-15 18:30:57.816 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=XAG narrative=None catalyst=None confidence=0.8 elapsed=19.5s
+2026-05-15 18:31:14.561 | INFO     | services.l5_briefing:_generate_one:316 - briefing generated: entity=XAU narrative=None catalyst=None confidence=0.8 elapsed=16.1s
+2026-05-15 18:31:14.776 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:31:15.003 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:31:15.003 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:31:45.245 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:31:45.418 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:31:45.419 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:32:15.707 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:32:15.886 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:32:15.887 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:32:46.086 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:32:46.236 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:32:46.237 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:33:16.385 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:33:16.734 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:33:16.735 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:33:46.905 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:33:47.067 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:33:47.068 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:34:17.359 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:34:17.598 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:34:17.599 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:34:47.867 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:34:48.055 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:34:48.056 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:35:18.253 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:35:18.437 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:35:18.438 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:35:48.758 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:35:48.914 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:35:48.915 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:36:19.303 | INFO     | services.l0_normalizer:run_once:141 - normalizer 本轮：扫描 9 条（tw=0 bn=9 dc=0）→ 写入 9 条（重复 0 条，空内容跳过 0 条）
+2026-05-15 18:36:19.417 | INFO     | services.l1_entity_extractor:run_once:154 - entity_extractor 本轮：处理 9 条消息 → 产出 8 条实体提及
+2026-05-15 18:36:19.418 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:36:19.633 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:36:19.735 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:36:19.887 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:36:19.888 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:36:50.026 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:36:50.190 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:36:50.190 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:37:20.470 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:37:20.647 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:37:20.648 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:37:50.955 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:37:51.178 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:37:51.179 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:38:21.716 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:38:22.500 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:38:22.502 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:38:53.151 | INFO     | services.l3_cooccurrence:run_once:161 - cooccur skipped: window unchanged
+2026-05-15 18:38:53.603 | INFO     | services.l5_briefing:run_once:163 - briefing skipped: latest window already processed
+2026-05-15 18:38:53.604 | INFO     | scheduler.jobs:_worker_loop:110 - 本轮无数据可处理，sleep 30s 后重试
+2026-05-15 18:39:12.272 | INFO     | __main__:main:688 - 收到退出信号，正在停止调度器...
+2026-05-15 18:39:12.273 | INFO     | scheduler.jobs:_worker_loop:116 - summary worker 已停止
