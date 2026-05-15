@@ -84,7 +84,7 @@ class NewPipelineSettings:
     # 比较时不区分大小写（HotnessService 内部 .upper() 处理）。
     hotness_exclude_entities: tuple[str, ...] = (
         "BTC", "ETH", "SOL", "BNB",
-        "USDT", "USDC", "DAI",
+        "USDT", "USDC", "DAI", "OP"
     )
 
     # ==========================================================================
