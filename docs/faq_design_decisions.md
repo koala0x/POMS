@@ -23,6 +23,7 @@
 11. [Q12：4 个窗口 × 一堆字段，这么多配置我看晕了，到底要改哪几个？](#q12)
 12. [Q13："按 ~5 条/天 那一列填阈值"到底是啥意思？怎么照着 tune_helper 输出改配置？](#q13)
 13. [Q14：告警推送的决策逻辑是什么？[首次] [重新触发] [升级] 这些标签什么意思？](#q14)
+14. [Q15：LLM 简报什么时候触发？为什么日志里全是 "already processed" 没生成简报？](#q15)
 
 ---
 
@@ -1765,3 +1766,121 @@ rank: #3 @ 2026-05-15 14:15
 ### Q14.8 一句话结论
 
 **告警 = 门槛过滤(谁有资格) + 决策树(发不发 + 发什么标签)**。门槛管"频率",决策树管"不刷屏 + 不漏信号"。你日常只需要调门槛(4 个 growth_threshold + 1 个 exclude_entities);决策树的参数(cooldown / heartbeat / multiplier)默认就是对的,除非你明确觉得"[重新触发] 太频繁"或"[持续] 太少"才动它们。
+
+
+---
+
+## <a id="q15"></a>Q15：LLM 简报什么时候触发？为什么日志里全是 "already processed" 没生成简报？
+
+**短答**：
+
+LLM 简报（BriefingService）每 15 分钟触发一次,只给 1h 榜 Top-N 中 growth ≥ min_growth 的 entity 调 Ollama。日志里大量 `briefing skipped: latest window already processed` **不是错误**——worker 每 30 秒轮询一次,但 briefing 每 15 分钟才有新窗口,中间那些轮次都是正常跳过。
+
+**详细答**：
+
+### Q15.1 LLM 简报的触发流程
+
+```
+每 15 分钟整点对齐（:00 / :15 / :30 / :45）
+        ↓
+① 取最新 1h 榜的 window_end
+        ↓
+② 跟上次处理的 window_end 比较
+   相同 → "latest window already processed"（正常跳过）
+   不同 → 继续
+        ↓
+③ 取 1h 榜 Top-N（默认 top_n=10）
+        ↓
+④ 筛 growth_rate >= briefing_min_growth（默认 0.5）
+   全部不够格 → "no eligible entity"（跳过）
+        ↓
+⑤ 逐个 entity 检查：同窗口已生成过？
+   是 → "同窗口已生成"（跳过该 entity）
+   否 → 继续
+        ↓
+⑥ 拉 evidence 消息（过去 1h 该 entity 的 normalized_messages）
+   evidence 为空 → "无 evidence"（跳过该 entity）
+        ↓
+⑦ 渲染 prompt → 调 Ollama → 解析 JSON → 写 entity_briefings
+   成功 → "briefing generated: entity=X narrative=... elapsed=20s"
+   失败 → "briefing LLM call failed" 或 "briefing JSON parse failed"
+```
+
+### Q15.2 日志里各种 "skipped" 的含义
+
+| 日志 | 含义 | 是不是问题 |
+|---|---|---|
+| `briefing skipped: latest window already processed` | 当前 15min 窗口已处理过,等下一个 | ❌ 完全正常,每 30 秒出现一次 |
+| `briefing skipped: no eligible entity in Top-N` | 1h 榜 Top-N 全部 growth < min_growth | ⚠️ 数据稀,没人够格 |
+| `briefing skipped: entity=X 同窗口已生成` | 同一个 15min 窗口已经给它生成过了 | ❌ 正常,幂等保护 |
+| `briefing skipped: entity=X 无 evidence` | entity 上了榜但过去 1h 没有关联消息 | ⚠️ 可能是时间窗口边界问题 |
+| `briefing LLM call failed` | Ollama 超时/连接失败 | ❌ 检查 Ollama 服务是否在跑 |
+| `briefing JSON parse failed` | LLM 返回了非法 JSON | ⚠️ Phase 2.8 加了 schema 后应该很少 |
+| `briefing generated: entity=X narrative=None` | LLM 调了,但判断"看不出叙事" | ❌ 正常,消息内容太泛时 LLM 会填 null |
+
+### Q15.3 为什么 "already processed" 出现这么多次
+
+这是**最常见的困惑**。原因很简单：
+
+- worker 每 **30 秒**轮询一次所有 service
+- BriefingService 每 **15 分钟**才有新窗口
+- 15 分钟 ÷ 30 秒 = 30 次轮询,其中 29 次都是 "already processed"
+
+所以你看到连续 29 条 `already processed` + 1 条 `briefing generated` 是**完全正常的节奏**。
+
+### Q15.4 为什么生成的简报 narrative=None / catalyst=None
+
+LLM 被调了,也成功返回了 JSON,但字段填了 null。这意味着：
+
+- evidence 消息内容太短/太泛（如 "$ASTEROID 🚀🚀🚀"）
+- LLM 按 prompt 要求"判断不出填 null,不要瞎猜"
+
+这**不是 bug**,是 prompt 设计的保守策略——宁可不说,也不编造。
+
+如果你想让 LLM 更"大胆"一些（即使不确定也给个猜测）,可以改 `prompts/level5_briefing.txt` 里的措辞,把"判断不出填 null"改成"尽量给出推测,confidence 标低"。但这会增加幻觉风险。
+
+### Q15.5 怎么确认 LLM 确实在工作
+
+```bash
+# 看成功生成了多少条
+grep "briefing generated" logs/service.log | wc -l
+
+# 看最近生成的内容
+grep "briefing generated" logs/service.log | tail -5
+
+# 查 DB 里的简报
+psql -h 192.168.1.219 -U all_new -d all_new -c "
+SELECT entity, window_end, narrative, catalyst, confidence
+FROM entity_briefings
+ORDER BY window_end DESC
+LIMIT 10;
+"
+```
+
+### Q15.6 怎么让更多 entity 生成简报
+
+| 想达到 | 改什么 | 在哪 | 副作用 |
+|---|---|---|---|
+| 更多 entity 够格 | `briefing_min_growth: 0.5 → 0.0` | `_new.py` | 所有上榜 entity 都调 LLM,CPU 压力大 |
+| 取更多候选 | `briefing_top_n: 10 → 15` | `_new.py` | 单轮耗时从 ~3min 涨到 ~5min |
+| LLM 推理更快 | 换小模型 `ollama_model_level5: qwen3:8b` | `_llm.py` | 质量可能下降 |
+| LLM 不超时 | `ollama_timeout_level5: 300 → 600` | `_llm.py` | 单轮可能卡 10 分钟 |
+
+**当前瓶颈不在配置,在数据流量**——消息太少导致 1h 榜 growth 普遍低,能进 briefing 的 entity 就少。等流量起来,briefing 产出会自然增多。
+
+### Q15.7 告警里的 📰 是怎么来的
+
+告警消息末尾偶尔出现的 `📰 NFT 价值重估 | Slonks NFT 真实流通量计算` 就是 briefing 的产出。逻辑：
+
+```
+AlertTriggerService 推送告警时:
+  → 查 entity_briefings 表:这个 entity 最近 1h 有没有 briefing?
+  → 有 → 追加 "📰 {narrative} | {catalyst}" 一行
+  → 没有 → 不追加（告警照常发,不等 briefing）
+```
+
+**告警永远不会因为没有 briefing 而被阻塞。** briefing 是"锦上添花",有就带上,没有就纯告警。
+
+### Q15.8 一句话结论
+
+**日志里大量 "already processed" 是正常的（30 秒轮询 vs 15 分钟窗口）；LLM 每 15 分钟确实在调,只是你的数据流量决定了每轮只有 2~3 个 entity 够格,且消息内容太泛时 LLM 会诚实地填 null。** 这不是系统故障,是数据稀疏期的正常表现。
