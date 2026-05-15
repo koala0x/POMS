@@ -363,6 +363,7 @@ def main() -> None:
     alert_service = None  # 1h 主实例（保留旧名给 RealtimeAlertService 注入用）
     alert_services: list = []
     telegram_client = None
+    notify_client = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         from notifications.telegram_client import TelegramClient
         from services.l2_alert_trigger import AlertTriggerService
@@ -372,6 +373,24 @@ def main() -> None:
             chat_id=settings.telegram_chat_id,
             timeout_seconds=settings.telegram_timeout_seconds,
         )
+
+        # PushPlus 微信推送（可选，token 非空才启用）
+        push_clients: list = [telegram_client]
+        if settings.pushplus_token:
+            from notifications.pushplus_client import PushPlusClient
+
+            pushplus_client = PushPlusClient(
+                token=settings.pushplus_token,
+                template=settings.pushplus_template,
+                timeout_seconds=settings.pushplus_timeout_seconds,
+            )
+            push_clients.append(pushplus_client)
+            logger.info("PushPlus 微信推送已启用")
+
+        # 多渠道广播客户端：所有 service 统一用这个，内部同时推 Telegram + 微信
+        from notifications.multi_client import MultiClient
+
+        notify_client = MultiClient(clients=push_clients)
         # Phase 2.7 Task 6：briefing 集成
         # briefing_enabled 时构造 BriefingsRepo() 注入 alert_service，让告警消息
         # 附带 LLM 简报（narrative / catalyst）。未启用 briefing → 传 None 走原模板。
@@ -384,7 +403,7 @@ def main() -> None:
         alert_service = AlertTriggerService(
             db=db,
             hotness_repo=hotness_repo,
-            telegram_client=telegram_client,
+            telegram_client=notify_client,
             window_type="1h",
             growth_threshold=settings.alert_growth_threshold,
             min_count_short=settings.alert_min_count_short,
@@ -417,7 +436,7 @@ def main() -> None:
             alert_6h = AlertTriggerService(
                 db=db,
                 hotness_repo=hotness_repo,
-                telegram_client=telegram_client,
+                telegram_client=notify_client,
                 window_type="6h",
                 growth_threshold=settings.alert_6h_growth_threshold,
                 min_count_short=settings.alert_6h_min_count_short,
@@ -445,7 +464,7 @@ def main() -> None:
             alert_3h = AlertTriggerService(
                 db=db,
                 hotness_repo=hotness_repo,
-                telegram_client=telegram_client,
+                telegram_client=notify_client,
                 window_type="3h",
                 growth_threshold=settings.alert_3h_growth_threshold,
                 min_count_short=settings.alert_3h_min_count_short,
@@ -472,7 +491,7 @@ def main() -> None:
             alert_24h = AlertTriggerService(
                 db=db,
                 hotness_repo=hotness_repo,
-                telegram_client=telegram_client,
+                telegram_client=notify_client,
                 window_type="24h",
                 growth_threshold=settings.alert_24h_growth_threshold,
                 min_count_short=settings.alert_24h_min_count_short,
@@ -523,7 +542,7 @@ def main() -> None:
             db=db,
             mentions_repo=mentions_repo,
             sliding_counter=sliding_counter,
-            telegram_client=telegram_client,
+            telegram_client=notify_client,
             shared_alert_records=alert_service._alert_records,
             burst_threshold=settings.realtime_burst_threshold,
             growth_threshold=settings.realtime_growth_threshold,
@@ -622,13 +641,13 @@ def main() -> None:
     #   1. settings.digest_enabled = True
     #   2. Telegram 已配置（telegram_client is not None，与 alert 同款检查）
     # ======================================================================
-    if settings.digest_enabled and telegram_client is not None:
+    if settings.digest_enabled and notify_client is not None:
         from services.l2_digest_pusher import DigestPusherService
 
         digest_service = DigestPusherService(
             db=db,
             hotness_repo=hotness_repo,
-            telegram_client=telegram_client,
+            telegram_client=notify_client,
             window_types=settings.digest_window_types,
             top_n=settings.digest_top_n,
             push_every_quarters=settings.digest_push_every_quarters,
