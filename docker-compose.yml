@@ -1,6 +1,7 @@
 services:
   app:
     build: .
+    image: pomsai
     platform: linux/amd64
     container_name: pomsai
     restart: unless-stopped
