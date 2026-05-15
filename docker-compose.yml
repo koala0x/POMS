@@ -1,0 +1,9 @@
+services:
+  app:
+    build: .
+    platform: linux/amd64
+    container_name: pomsai
+    restart: unless-stopped
+    # 日志持久化到宿主机，容器重建不丢
+    volumes:
+      - ./logs:/app/logs
