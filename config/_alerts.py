@@ -65,15 +65,12 @@ class AlertSettings:
 
     # growth_rate ≥ 此值才告警；默认 20 倍（"够热"）。
     # 调小 → 告警更频繁；调大 → 只接 super hot。
-    # 部署后建议先观察 1 周 hotness_snapshots.growth_rate 的 99% 分位再调整。
-    # ★ 当前为观察期临时值（1.0）：你的数据流量极稀，最新 1h 榜 growth 中位数 ~0.5，
-    # 调到 1.0 让"略高于平均"的实体也触发告警。观察完毕（约 2 周）后改回 5.0 或 20.0
-    alert_growth_threshold: float = 1.0
+    # ★ 2026-05-15 调参：tune_helper 推荐 ~10 条/天 = 1.5
+    alert_growth_threshold: float = 1.5
 
     # count_short ≥ 此值；避免 1 次提及就告警（噪音）。
-    # ★ 当前数据流量极稀，观察期临时调到 1（即只要被提到就算），让你能积累样本
-    # 流量起来后改回 3
-    alert_min_count_short: int = 1
+    # 流量起来后改回 3；当前 2 = 至少被提到 2 次才算
+    alert_min_count_short: int = 2
 
     # cross_source ≥ 此值；Phase 1 跨源命中率低，默认 1（单源也告警）。
     # 调成 2 → 只接多源共振信号（更高质量但告警更稀疏）。
@@ -177,20 +174,20 @@ class AlertSettings:
     alert_6h_enabled: bool = True
     # 6h 窗口 growth_rate 告警阈值。比 1h 严一档（噪音少 → 阈值低也安全），
     # 但绝对值仍要求"明显异常"
-    alert_6h_growth_threshold: float = 5.0
+    alert_6h_growth_threshold: float = 1.2
     alert_6h_min_count_short: int = 5
     alert_6h_min_cross_source: int = 1
 
     # 3h 窗口告警（Phase 2.8 新增）。阈值介于 1h 与 6h 之间。
     alert_3h_enabled: bool = True
-    alert_3h_growth_threshold: float = 7.0
+    alert_3h_growth_threshold: float = 1.0
     alert_3h_min_count_short: int = 5
     alert_3h_min_cross_source: int = 1
 
     # 24h 窗口告警是否启用（默认 ON：宏观叙事每天就那么 1~2 个，告警不会刷屏）
     alert_24h_enabled: bool = True
     # 24h growth 阈值最低（基线最稳定 → 任何明显变化都值得通知）
-    alert_24h_growth_threshold: float = 3.0
+    alert_24h_growth_threshold: float = 8.9
     alert_24h_min_count_short: int = 10
     alert_24h_min_cross_source: int = 1
 
@@ -213,8 +210,8 @@ class AlertSettings:
     # 的所有大币。命中比较时大小写不敏感（service 内部 .upper()）。
     # ==========================================================================
     alert_exclude_entities: tuple[str, ...] = (
-        # "BTC", "ETH", "SOL", "BNB",
-        # "USDT", "USDC", "DAI","OP","UNI","Solana"
+        "BTC", "ETH", "SOL", "BNB",
+        "USDT", "USDC", "DAI",
     )
 
     # ==========================================================================
