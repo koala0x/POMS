@@ -1,0 +1,150 @@
+# dictionaries/tickers.yaml
+#
+# 目的：
+#   把原 `services/prefilter.py` 里硬编码的 COIN_KEYWORDS_EN（60+）和
+#   COIN_KEYWORDS_ZH（7）外置为 YAML，让 prefilter 与 Entity_Extractor
+#   共享同一份数据。
+#
+# Schema（参考 dictionaries/loader.py）：
+#   <TICKER_NAME>:
+#     type:    layer1 / defi / meme / layer2 / stablecoin / privacy / brc20
+#                (加载后存为 DictionaryEntry.category，Phase 1 只存不用，
+#                 entity_type 固定由所在文件决定，恒为 "ticker")
+#     aliases: [别名1, 别名2, ...]   # 可选；中英文混合都行
+#
+# 匹配规则（由 prefilter.py + Entity_Extractor 协同实现）：
+#   - 英文名（如 BTC）：non-alnum 边界匹配，case-insensitive
+#   - 中文别名（如 比特币）：substring match
+#   - $XXX 写法：由 prefilter 正则自动捕获，**不依赖词典**
+#
+# ============================================================================
+# 词典精简原则（2026-05 修订）
+# ============================================================================
+#
+# 之前词典塞了 57 条，包括美股 / 老 layer1 / 冷叙事 DeFi 等。复盘时按
+# "该不该留 3 问"做了精简：
+#
+#   1. 它有可能"突然热"吗？(growth_rate > 5 概率)
+#   2. 它"裸写"被讨论吗？(中文别名 / 不带 $ 的写法)
+#   3. 我会因为它热而做 crypto 决策吗？
+#
+# 3 个问题至少有 1 个 yes 才留。3 个都 no 的删。最终从 57 → 27 条。
+#
+# 删除的：
+#   - 10 个美股（AAPL/TSLA/MSFT/NVDA/AMD/META/GOOG/AMZN/MSTR/COIN）
+#     非 crypto alpha；NVDA 财报日会污染 hotness 但不能用来买币
+#   - 12 个 alias 为空的老 L1（XRP/ADA/AVAX/DOT/LINK/TON/ATOM/NEAR/INJ/SUI/APT/MATIC）
+#     正则自动抓 $XRP，词典写它们的 ticker name 是冗余；老币 growth 不爆
+#   - 3 个 alias 为空的老币（FIL/LTC/BCH）
+#   - 3 个老 DeFi（COMP/CRV/MKR）：热度恒定，growth 不爆
+#   - 2 个冷却 L2（STARK/ZKSYNC）：zk 叙事退潮
+#
+# 保留的（27 条）：
+#   - 中文裸写需要词典帮忙的（BTC=比特币, ETH=以太坊, BNB=币安, TRX=波场）
+#   - 当前热度期 / meme 容易爆的（HYPE + 7 个 meme）
+#   - 有叙事价值的 DeFi（AAVE, UNI, LIDO, PENDLE, EIGEN）
+#   - 新兴 L2（ARB, OP, BASE）
+#   - 阶段性热度（ZEC, ORDI, SATS）
+#   - 稳定币（USDT, USDC, DAI）—— "稳定币" 这个 keyword 已挪到 narratives.yaml
+#
+# 词典外的所有 $TICKER 写法（无论新币老币）由正则自动捕获，
+# confidence=0.95，照样能进 hotness 榜——所以"删词典 ≠ 漏热点"。
+# ============================================================================
+
+
+# =========================================================================
+# 主流币（保留中文别名，正则抓不到的部分）
+# =========================================================================
+
+BTC:
+  type: layer1
+  aliases: [比特币, 大饼]
+ETH:
+  type: layer1
+  aliases: [以太坊, 以太]
+BNB:
+  type: layer1
+  aliases: [币安]
+SOL:
+  type: layer1
+TRX:
+  type: layer1
+  aliases: [波场]
+HYPE:
+  type: layer1
+
+
+# =========================================================================
+# Meme 币（meme 是 growth_rate 容易爆的领域，全保留）
+# =========================================================================
+
+DOGE:
+  type: meme
+  aliases: [狗狗币]
+PEPE:
+  type: meme
+SHIB:
+  type: meme
+  aliases: [屎币]
+WIF:
+  type: meme
+BONK:
+  type: meme
+DOGS:
+  type: meme
+FLOKI:
+  type: meme
+
+
+# =========================================================================
+# DeFi（保留有叙事价值的）
+# =========================================================================
+
+AAVE:
+  type: defi
+UNI:
+  type: defi
+LIDO:
+  type: defi
+PENDLE:
+  type: defi
+EIGEN:
+  type: defi
+
+
+# =========================================================================
+# L2 / 跨链（保留新兴的）
+# =========================================================================
+
+ARB:
+  type: layer2
+OP:
+  type: layer2
+BASE:
+  type: layer2
+
+
+# =========================================================================
+# 阶段性热度（隐私 / BRC20）
+# =========================================================================
+
+ZEC:
+  type: privacy
+ORDI:
+  type: brc20
+SATS:
+  type: brc20
+
+
+# =========================================================================
+# 稳定币
+# 注意："稳定币"这个 keyword 已挪到 narratives.yaml 的 Stablecoin 叙事
+# 因为它指代赛道而非具体某个币
+# =========================================================================
+
+#USDT:
+#  type: stablecoin
+#USDC:
+#  type: stablecoin
+#DAI:
+#  type: stablecoin
