@@ -257,7 +257,7 @@ class NewPipelineSettings:
     # 部署后观察一周再调。
     # ★ 当前为观察期临时值（0.5）：与 alert_growth_threshold=1.0 配套，
     # 让所有上榜实体都尽量带 briefing。观察完毕后改回 5.0
-    briefing_min_growth: float = 0.3
+    briefing_min_growth: float = 0.2
 
     # 每个 entity 喂给 LLM 的代表消息数上限
     # 10 条 × 平均 200 字 ≈ 2000 token，加 prompt 模板 + 输出留白远低于
