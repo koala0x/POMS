@@ -12,7 +12,8 @@ LLM（Ollama）配置分组。
 未来 Phase 3 如果加更多 LLM 模型 / 任务，统一往本文件追加字段，便于集中管理。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import os
 
 
 @dataclass(frozen=True)
@@ -27,13 +28,20 @@ class LLMSettings:
     # （client 自己拼 /api/chat）。
     # ★ 必须保证 Ollama 监听在 0.0.0.0 而非 127.0.0.1，否则跨机器访问会被拒绝。
     # 配置方式：在跑 Ollama 的机器上 `OLLAMA_HOST=0.0.0.0:11434 ollama serve`。
-    ollama_base_url: str = "http://192.168.1.219:11434"
+    #
+    # 优先读环境变量 OLLAMA_BASE_URL（容器部署用 host.docker.internal 访问宿主机），
+    # 未设置时回退到局域网 IP（本地开发直连）。
+    ollama_base_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "OLLAMA_BASE_URL", "http://host.docker.internal:11434"
+        )
+    )
 
     # ----- 五次摘要（level5）：Phase 2.7 LLM 定向简报使用，每 15 分钟整点对齐 -----
-    # qwen3:8b 实测（2026-05-14 prompt 工程）：5 entity 全合法 JSON，平均 30s/次，
-    # Top-5 一轮 ~2.5 分钟。30b 模型质量更高但 CPU 推理 90s+，单轮 7.5 分钟，
-    # 会拖累 worker 节奏；保持 8b 即可。
-    ollama_model_level5: str = "qwen3:8b"
+    # 当前部署：qwen2.5:1.5b（Mac mini 资源受限，选小参数模型保证响应速度）。
+    # 历史参考：qwen3:8b 实测平均 30s/次 / Top-5 一轮 ~2.5 分钟；
+    # 1.5b 模型推理更快但简报质量会下降，可视实际产出再调整。
+    ollama_model_level5: str = "qwen2.5:1.5b"
 
     # level5 单次请求超时（秒）。
     # 实测平均 30s，给 600s 留足余量（CPU 推理偶尔会因消息长拖到 60~90s）。

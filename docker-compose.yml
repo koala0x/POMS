@@ -5,6 +5,16 @@ services:
     platform: linux/amd64
     container_name: pomsai
     restart: unless-stopped
+    # Linux 下显式映射 host.docker.internal 到宿主机网关
+    # （macOS/Windows Docker Desktop 自带，不会冲突）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # 日志持久化到宿主机，容器重建不丢
     volumes:
       - ./logs:/app/logs
+    networks:
+      - poms-net
+
+networks:
+  poms-net:
+    external: true

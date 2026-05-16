@@ -9,13 +9,18 @@ from __future__ import annotations
 被 `db/connection.py` 直接读取，是新老链路共享的基础设施。
 """
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
 class DatabaseSettings:
     # DB 所在主机。可以是域名、IP 或容器名。
-    db_host: str = "192.168.1.219"
+    # 优先读环境变量 DB_HOST（容器部署用 poms-postgres 容器名互联），
+    # DB 主机。Docker 部署时默认用容器名 "poms-postgres";
+    db_host: str = field(
+        default_factory=lambda: os.environ.get("DB_HOST", "poms-postgres")
+    )
     # PostgreSQL 端口，默认 5432。
     db_port: int = 5432
     # 业务库名，应与上游 API 服务使用同一个库（共享原始表）。
