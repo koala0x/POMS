@@ -250,14 +250,14 @@ class NewPipelineSettings:
     # 调小 → 漏掉一些值得 brief 的实体
     # ★ 当前为观察期临时值（10）：让 LLM 给更多实体出简报供质量评估
     # 单轮 ~5 分钟，worker 节奏 30s 轮询能接受
-    briefing_top_n: int = 10
+    briefing_top_n: int = 30
 
     # growth_rate >= 此值才调 LLM；过滤"温和上涨"避免 LLM 浪费在噪音上
     # 30 是经验值；按当前数据流量可能太高（hotness 榜 growth 中位数 ~2），
     # 部署后观察一周再调。
     # ★ 当前为观察期临时值（0.5）：与 alert_growth_threshold=1.0 配套，
     # 让所有上榜实体都尽量带 briefing。观察完毕后改回 5.0
-    briefing_min_growth: float = 0.2
+    briefing_min_growth: float = 0.0
 
     # 每个 entity 喂给 LLM 的代表消息数上限
     # 10 条 × 平均 200 字 ≈ 2000 token，加 prompt 模板 + 输出留白远低于
