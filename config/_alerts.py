@@ -178,7 +178,7 @@ class AlertSettings:
     # cooldown 内 growth 增长百分比阈值（0.0 = 关闭，0.3 = 涨 30% 即升级）。
     # 默认 0.3：比 escalation_growth_multiplier(1.5) 宽松一档，
     # 让"温和但持续走高"的实体也能在 cooldown 内被推送一次。
-    alert_growth_delta_pct: float = 0.2
+    alert_growth_delta_pct: float = 0.4
 
     # ==========================================================================
     # Phase 2.8 多窗口告警（per-window 阈值参数化）
@@ -195,13 +195,13 @@ class AlertSettings:
     alert_6h_enabled: bool = True
     # 6h 窗口 growth_rate 告警阈值。比 1h 严一档（噪音少 → 阈值低也安全），
     # 但绝对值仍要求"明显异常"
-    alert_6h_growth_threshold: float = 1.2
+    alert_6h_growth_threshold: float = 1.6
     alert_6h_min_count_short: int = 5
     alert_6h_min_cross_source: int = 1
 
     # 3h 窗口告警（Phase 2.8 新增）。阈值介于 1h 与 6h 之间。
     alert_3h_enabled: bool = True
-    alert_3h_growth_threshold: float = 1.0
+    alert_3h_growth_threshold: float = 1.5
     alert_3h_min_count_short: int = 5
     alert_3h_min_cross_source: int = 1
 
