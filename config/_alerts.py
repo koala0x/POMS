@@ -115,7 +115,7 @@ class AlertSettings:
 
     # growth 升级倍数：本次 growth ≥ 上次告警时 growth × 此倍数 → 立刻升级告警。
     # 默认 1.5 倍（上次告警 growth=20，本次 ≥ 30 即重发）；调大 → 升级更难触发。
-    alert_escalation_growth_multiplier: float = 2
+    alert_escalation_growth_multiplier: float = 3
 
     # 心跳提醒间隔（小时）：持续热点最长不告警时长，超过此值即便没质变也再发一次。
     # 设计意图：6 小时一次"我还在烧"的提醒，避免用户以为告警系统挂了。
@@ -153,12 +153,12 @@ class AlertSettings:
     # 累积多少条新提及触发一次实时计算（design §3.1.1 burst_threshold）。
     # 50 是经验值：低流量期 5~10 轮（25~50 秒）攒满；高流量期单轮就触发。
     # 调小 → 触发更频繁但 CPU/Telegram 压力大；调大 → 反之。
-    realtime_burst_threshold: int = 50
+    realtime_burst_threshold: int = 20
 
     # growth_rate ≥ 此值才告警（与整点 alert_growth_threshold 独立配置）。
     # 30 比整点严——分钟级窗口的 growth 抖动比整点榜大，
     # 把噪音放进去会把 Telegram 灌死。
-    realtime_growth_threshold: float = 30.0
+    realtime_growth_threshold: float = 40.0
 
     # count_short ≥ 此值才告警（与整点 alert_min_count_short 独立配置）。
     # 5 比整点严，过滤"3 条偶然提及就触发"——
@@ -178,7 +178,7 @@ class AlertSettings:
     # cooldown 内 growth 增长百分比阈值（0.0 = 关闭，0.3 = 涨 30% 即升级）。
     # 默认 0.3：比 escalation_growth_multiplier(1.5) 宽松一档，
     # 让"温和但持续走高"的实体也能在 cooldown 内被推送一次。
-    alert_growth_delta_pct: float = 0.4
+    alert_growth_delta_pct: float = 1
 
     # ==========================================================================
     # Phase 2.8 多窗口告警（per-window 阈值参数化）
