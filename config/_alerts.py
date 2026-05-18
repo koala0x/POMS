@@ -91,7 +91,7 @@ class AlertSettings:
 
     # count_short ≥ 此值；避免 1 次提及就告警（噪音）。
     # 流量起来后改回 3；当前 2 = 至少被提到 2 次才算
-    alert_min_count_short: int = 2
+    alert_min_count_short: int = 3
 
     # cross_source ≥ 此值；Phase 1 跨源命中率低，默认 1（单源也告警）。
     # 调成 2 → 只接多源共振信号（更高质量但告警更稀疏）。
@@ -111,15 +111,15 @@ class AlertSettings:
 
     # 常规冷却期（分钟）：同实体在此期间内只在"质变"时才再告警。
     # 60 分钟是经验值——足够避免刷屏，又不会错过 1~2 小时维度的脉冲。
-    alert_cooldown_minutes: int = 60
+    alert_cooldown_minutes: int = 30
 
     # growth 升级倍数：本次 growth ≥ 上次告警时 growth × 此倍数 → 立刻升级告警。
     # 默认 1.5 倍（上次告警 growth=20，本次 ≥ 30 即重发）；调大 → 升级更难触发。
-    alert_escalation_growth_multiplier: float = 1.5
+    alert_escalation_growth_multiplier: float = 2
 
     # 心跳提醒间隔（小时）：持续热点最长不告警时长，超过此值即便没质变也再发一次。
     # 设计意图：6 小时一次"我还在烧"的提醒，避免用户以为告警系统挂了。
-    alert_heartbeat_hours: int = 6
+    alert_heartbeat_hours: int = 3
 
     # ==========================================================================
     # 消息渲染
